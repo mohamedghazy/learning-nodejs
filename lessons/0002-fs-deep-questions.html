@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 2: Why Callbacks Still Exist, fs in Next.js, and Top-Level Await Edge Cases</title>
+  <link rel="stylesheet" href="../assets/style.css">
+  <link rel="stylesheet" href="../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Lesson 02</p>
+<h1>Three Deep Questions</h1>
+<p class="subtitle">Why the callback API still exists, how <code>fs</code> relates to Next.js, and the real edge cases of top-level await.</p>
+
+<!-- ============================================ -->
+<h2>1. Why Does the Callback API Still Exist?</h2>
+
+<p>
+  If <code>node:fs/promises</code> is the modern default, why hasn't Node.js deprecated the callback API?
+  Three reasons — historical, practical, and political.
+</p>
+
+<h3>Historical: The Ryan Dahl Decision (2010)</h3>
+<p>
+  In February 2010, Ryan Dahl (Node's creator) made a deliberate choice to use the
+  <code>callback(err, result)</code> pattern instead of Promises for all core APIs. His reasoning:
+  Promises are a "higher-level construct" that belongs in userland, not in the core runtime.
+  This was before ES2015 standardized Promises, so there was no agreed-upon Promise implementation anyway.
+  Every core module — <code>fs</code>, <code>http</code>, <code>net</code>, <code>crypto</code> — was built around callbacks.
+  (<a href="https://stackoverflow.com/questions/30299613/why-does-nodejs-not-use-promise-for-the-readfile-api" target="_blank">source</a>)
+</p>
+
+<h3>Practical: Backward Compatibility</h3>
+<p>
+  Millions of packages on npm depend on the callback API. Deprecating it would break
+  the entire ecosystem. Node.js follows <a href="https://semver.org/" target="_blank">semver</a> —
+  removing a stable API requires a major version bump and years of deprecation warnings.
+  The callback API is <strong>stable</strong> (not deprecated), so it won't disappear.
+</p>
+
+<h3>Performance: A Marginal (But Real) Difference</h3>
+<p>
+  The promise API wraps callbacks internally — every <code>fs/promises</code> call creates a Promise
+  object, which has a small allocation cost. For the vast majority of use cases, this is
+  negligible. But in <strong>extreme hot paths</strong> (think: a file-processing pipeline doing millions of
+  tiny reads per second), the callback API avoids that per-call object allocation. This is why
+  the Node.js docs once noted that "the callback-based versions are preferable for maximum performance."
+  In practice, you'll almost never hit this threshold.
+</p>
+
+<div class="callout">
+  <strong>Your takeaway:</strong> Use <code>node:fs/promises</code> for all new code. The callback API exists
+  for backward compatibility and niche performance scenarios — not because it's better.
+  If you encounter callback-style <code>fs</code> code in a codebase, you'll understand it, but don't write new code that way.
+</div>
+
+<h3>When You Might Still See Callbacks</h3>
+<ul>
+  <li><strong>Legacy codebases</strong> — anything written before Node 14 probably uses callbacks</li>
+  <li><strong>Streams</strong> — <code>createReadStream</code> and <code>createWriteStream</code> live on the callback-based <code>node:fs</code> import (not <code>node:fs/promises</code>), though you combine them with <code>pipeline</code> from <code>node:stream/promises</code></li>
+  <li><strong><code>fs.watch</code></strong> — the file watcher uses an event emitter pattern (not promises), because it's a long-lived listener, not a one-shot operation</li>
+</ul>
+
+<!-- ============================================ -->
+<h2>2. How This Relates to Next.js API Routes</h2>
+
+<p>
+  As a Next.js developer, you already know the client/server boundary intimately. The <code>fs</code>
+  module maps onto this boundary perfectly:
+</p>
+
+<h3>The Rule: <code>fs</code> Is Server-Only</h3>
+<p>
+  <code>node:fs</code> is a Node.js built-in that accesses the operating system's file system.
+  Browsers don't have file system access (by design — security). So:
+</p>
+
+<table>
+  <thead>
+    <tr><th>Context</th><th>Can use <code>fs</code>?</th><th>Why</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>API Routes (<code>app/api/*/route.ts</code>)</td>
+      <td>✅ Yes</td>
+      <td>Runs on the server (Node.js runtime)</td>
+    </tr>
+    <tr>
+      <td>Server Components (<code>app/page.tsx</code> without <code>'use client'</code>)</td>
+      <td>✅ Yes</td>
+      <td>Rendered on the server</td>
+    </tr>
+    <tr>
+      <td><code>getServerSideProps</code> / <code>getStaticProps</code> (Pages Router)</td>
+      <td>✅ Yes</td>
+      <td>Server-side data fetching</td>
+    </tr>
+    <tr>
+      <td>Client Components (<code>'use client'</code>)</td>
+      <td>❌ No</td>
+      <td>Bundled for the browser — <code>fs</code> doesn't exist there</td>
+    </tr>
+    <tr>
+      <td>Middleware (<code>middleware.ts</code>)</td>
+      <td>❌ No</td>
+      <td>Runs on Edge Runtime (V8 isolate, no Node.js APIs)</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>The Classic "Module not found: Can't resolve 'fs'" Error</h3>
+<p>
+  You'll get this error when you accidentally import <code>fs</code> in code that gets bundled for the
+  client. Next.js tree-shakes server-only code, but only when it can prove the import is
+  unreachable from the client bundle. If you import <code>fs</code> at the top of a file that's used
+  by both server and client code, the bundler includes it in the client bundle and fails.
+</p>
+
+<pre><code><span class="comment">// ❌ This will break if the file is ever imported client-side</span>
+<span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+<span class="keyword">import</span> { SomeComponent } <span class="keyword">from</span> <span class="string">'./SomeComponent'</span>;
+
+<span class="comment">// ✅ Keep fs usage in dedicated server-only files</span>
+<span class="comment">// lib/data.server.ts  (the .server suffix is a convention, not required)</span>
+<span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+<span class="keyword">import</span> { join } <span class="keyword">from</span> <span class="string">'node:path'</span>;
+
+<span class="keyword">export async function</span> <span class="function">getConfig</span>() {
+  <span class="keyword">const</span> raw = <span class="keyword">await</span> <span class="function">readFile</span>(
+    <span class="function">join</span>(process.cwd(), <span class="string">'config.json'</span>),
+    <span class="string">'utf8'</span>
+  );
+  <span class="keyword">return</span> JSON.parse(raw);
+}</code></pre>
+
+<h3>Practical Example: Reading a File in an API Route</h3>
+
+<pre><code><span class="comment">// app/api/config/route.ts</span>
+<span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+<span class="keyword">import</span> { join } <span class="keyword">from</span> <span class="string">'node:path'</span>;
+<span class="keyword">import</span> { NextResponse } <span class="keyword">from</span> <span class="string">'next/server'</span>;
+
+<span class="keyword">export async function</span> <span class="function">GET</span>() {
+  <span class="keyword">try</span> {
+    <span class="keyword">const</span> filePath = <span class="function">join</span>(process.cwd(), <span class="string">'data'</span>, <span class="string">'settings.json'</span>);
+    <span class="keyword">const</span> data = JSON.parse(
+      <span class="keyword">await</span> <span class="function">readFile</span>(filePath, <span class="string">'utf8'</span>)
+    );
+    <span class="keyword">return</span> NextResponse.<span class="function">json</span>(data);
+  } <span class="keyword">catch</span> (error) {
+    <span class="keyword">if</span> (error.code === <span class="string">'ENOENT'</span>) {
+      <span class="keyword">return</span> NextResponse.<span class="function">json</span>(
+        { error: <span class="string">'Settings file not found'</span> },
+        { status: <span class="number">404</span> }
+      );
+    }
+    <span class="keyword">throw</span> error;
+  }
+}</code></pre>
+
+<div class="callout warning">
+  <strong>Vercel/Serverless caveat:</strong> On serverless platforms, the file system is
+  <strong>read-only</strong> and <strong>ephemeral</strong>. You can read files that are part of your deployment
+  bundle (like JSON configs), but you cannot write files that persist between requests.
+  For file uploads or persistent storage, use object storage (S3, R2) or a database.
+  <code>fs.writeFile</code> will "work" but the file vanishes when the function instance is recycled.
+</div>
+
+<h3>Use <code>process.cwd()</code> vs <code>import.meta.dirname</code></h3>
+<p>
+  In Next.js, <code>process.cwd()</code> gives you the project root (where <code>package.json</code> lives).
+  Use it for accessing project files. <code>import.meta.dirname</code> (Node 20.11+) gives you the
+  directory of the current file — useful when you need paths relative to a specific module,
+  not the project root.
+</p>
+
+<!-- ============================================ -->
+<h2>3. Top-Level Await: The Edge Cases That Bite</h2>
+
+<p>
+  Top-level <code>await</code> is available in ES modules (your project already has
+  <code>"type": "module"</code>). It's elegant and powerful, but it has real edges you need to know.
+</p>
+
+<h3>Edge Case 1: It Only Works in ESM</h3>
+<p>
+  Top-level <code>await</code> is an ES module feature. It does <strong>not</strong> work in CommonJS files.
+  If your <code>package.json</code> doesn't have <code>"type": "module"</code>, or you're in a <code>.cjs</code> file,
+  you'll get a syntax error.
+</p>
+
+<pre><code><span class="comment">// package.json must have "type": "module"</span>
+<span class="comment">// OR the file must be named .mjs</span>
+<span class="comment">// OTHERWISE: SyntaxError: await is only valid in async functions</span>
+
+<span class="keyword">const</span> data = <span class="keyword">await</span> <span class="function">readFile</span>(<span class="string">'config.json'</span>, <span class="string">'utf8'</span>); <span class="comment">// ✓ in ESM</span></code></pre>
+
+<h3>Edge Case 2: It Blocks Importers (The "Waterfall" Problem)</h3>
+<p>
+  This is the big one. When a module uses top-level <code>await</code>, <strong>any module that imports
+  it must wait</strong> until the await resolves. If multiple modules use top-level await, they
+  execute <em>in import order</em>, not in parallel.
+</p>
+
+<pre><code><span class="comment">// slow-config.js — takes 2 seconds</span>
+<span class="keyword">export const</span> config = <span class="keyword">await</span> <span class="function">fetchRemoteConfig</span>(); <span class="comment">// 2s</span>
+
+<span class="comment">// slow-db.js — takes 1 second</span>
+<span class="keyword">export const</span> db = <span class="keyword">await</span> <span class="function">connectToDatabase</span>(); <span class="comment">// 1s</span>
+
+<span class="comment">// main.js — imports both</span>
+<span class="keyword">import</span> { config } <span class="keyword">from</span> <span class="string">'./slow-config.js'</span>; <span class="comment">// waits 2s</span>
+<span class="keyword">import</span> { db } <span class="keyword">from</span> <span class="string">'./slow-db.js'</span>;         <span class="comment">// THEN waits 1s</span>
+<span class="comment">// Total: 3 seconds — they ran in series, not parallel!</span></code></pre>
+
+<p>
+  This is the concern <a href="https://gist.github.com/Rich-Harris/0b6f317657f5167663b493c722647221" target="_blank">
+  Rich Harris flagged in his famous "Top-level await is a footgun" gist</a> (2017).
+  The final TC39 spec (variant B) improved this — sibling imports that <em>don't depend on each other</em>
+  can now execute their top-level awaits concurrently. But <strong>sequential imports still serialize</strong>.
+</p>
+
+<div class="callout danger">
+  <strong>The fix:</strong> Don't put slow async operations at the top level of modules that get
+  imported widely. Instead, export an async initialization function:
+</div>
+
+<pre><code><span class="comment">// ✅ Better: export a factory, don't run at import time</span>
+<span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">let</span> _config;
+
+<span class="keyword">export async function</span> <span class="function">getConfig</span>() {
+  <span class="keyword">if</span> (!_config) {
+    _config = JSON.parse(
+      <span class="keyword">await</span> <span class="function">readFile</span>(<span class="string">'config.json'</span>, <span class="string">'utf8'</span>)
+    );
+  }
+  <span class="keyword">return</span> _config;
+}
+
+<span class="comment">// ✅ When TLA is appropriate: the entry-point script</span>
+<span class="comment">// server.js (this is the root — nothing imports it)</span>
+<span class="keyword">const</span> config = <span class="keyword">await</span> <span class="function">getConfig</span>();
+<span class="keyword">const</span> db = <span class="keyword">await</span> <span class="function">connectToDatabase</span>(config.dbUrl);
+<span class="function">startServer</span>(config, db);</code></pre>
+
+<h3>Edge Case 3: Error Handling — Unhandled Rejections Kill the Process</h3>
+<p>
+  If a top-level <code>await</code> throws, the module fails to load. Any module that depends on it
+  also fails. In modern Node.js (16+), an unhandled rejection exits the process with code 1.
+  There's no surrounding <code>try/catch</code> unless you write one:
+</p>
+
+<pre><code><span class="comment">// ❌ If config.json is missing, this crashes the process</span>
+<span class="keyword">const</span> config = JSON.parse(
+  <span class="keyword">await</span> <span class="function">readFile</span>(<span class="string">'config.json'</span>, <span class="string">'utf8'</span>)
+);
+
+<span class="comment">// ✅ Handle the error explicitly</span>
+<span class="keyword">let</span> config;
+<span class="keyword">try</span> {
+  config = JSON.parse(<span class="keyword">await</span> <span class="function">readFile</span>(<span class="string">'config.json'</span>, <span class="string">'utf8'</span>));
+} <span class="keyword">catch</span> (err) {
+  <span class="keyword">if</span> (err.code === <span class="string">'ENOENT'</span>) {
+    console.warn(<span class="string">'No config.json found, using defaults'</span>);
+    config = { port: <span class="number">3000</span> };
+  } <span class="keyword">else</span> {
+    console.error(<span class="string">'Fatal: cannot read config'</span>, err);
+    process.exit(<span class="number">1</span>);
+  }
+}</code></pre>
+
+<h3>Edge Case 4: TypeScript Configuration</h3>
+<p>
+  If you use TypeScript (and you will in full-stack apps), top-level await requires:
+</p>
+
+<pre><code><span class="comment">// tsconfig.json</span>
+{
+  <span class="string">"compilerOptions"</span>: {
+    <span class="string">"module"</span>: <span class="string">"ES2022"</span>,     <span class="comment">// or "NodeNext"</span>
+    <span class="string">"target"</span>: <span class="string">"ES2017"</span>,     <span class="comment">// minimum for async/await</span>
+    <span class="string">"moduleResolution"</span>: <span class="string">"bundler"</span> <span class="comment">// or "NodeNext"</span>
+  }
+}</code></pre>
+
+<p>
+  Without these settings, TypeScript emits: <em>"Top-level 'await' expressions are only allowed
+  when the 'module' option is set to 'es2022', 'esnext', 'system', 'node16', or 'nodenext'."</em>
+</p>
+
+<h3>Edge Case 5: Testing Frameworks</h3>
+<p>
+  Some test runners (older versions of Jest, ts-jest) don't fully support ESM or top-level
+  await. If you use top-level await in a module being tested, the test runner may fail to
+  import it. Solutions:
+</p>
+<ul>
+  <li><strong>Vitest</strong> — full ESM support, handles top-level await natively</li>
+  <li><strong>Jest with ESM</strong> — requires <code>--experimental-vm-modules</code> flag and specific config</li>
+  <li><strong>Pattern:</strong> Keep top-level await in entry points, not in modules your tests import</li>
+</ul>
+
+<h3>Summary: When Top-Level Await Is Appropriate</h3>
+<table>
+  <thead>
+    <tr><th>Use Case</th><th>TLA OK?</th><th>Reason</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Entry-point script (<code>server.js</code>, <code>cli.js</code>)</td>
+      <td>✅</td>
+      <td>Nothing imports it — no waterfall risk</td>
+    </tr>
+    <tr>
+      <td>Quick one-off scripts</td>
+      <td>✅</td>
+      <td>No module graph to block</td>
+    </tr>
+    <tr>
+      <td>Library modules imported by others</td>
+      <td>⚠️ Caution</td>
+      <td>Blocks all importers — use async factory instead</td>
+    </tr>
+    <tr>
+      <td>Modules with slow network I/O</td>
+      <td>❌ Avoid</td>
+      <td>Serializes startup, degrades boot time</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">Why hasn't Node.js deprecated the callback-based <code>fs</code> API?</p>
+  <button class="quiz-option" data-index="0">The callback API is faster than promises in every scenario</button>
+  <button class="quiz-option" data-index="1">The promise API is still experimental and unstable in Node.js</button>
+  <button class="quiz-option" data-index="2">Millions of packages depend on it and removing it breaks the ecosystem</button>
+  <button class="quiz-option" data-index="3">The callback API supports features that promises cannot handle</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">In Next.js, which of these contexts <strong>cannot</strong> use the <code>fs</code> module?</p>
+  <button class="quiz-option" data-index="0">An API route handler in app/api/users/route.ts</button>
+  <button class="quiz-option" data-index="1">A middleware function defined in middleware.ts at the project root</button>
+  <button class="quiz-option" data-index="2">A Server Component that reads a JSON file for static data</button>
+  <button class="quiz-option" data-index="3">A getStaticProps function in a Pages Router page component</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">What happens when module A uses top-level await and module B imports A?</p>
+  <button class="quiz-option" data-index="0">Module B loads immediately and A's export is undefined until resolved</button>
+  <button class="quiz-option" data-index="1">Module B throws an error because you cannot import async modules</button>
+  <button class="quiz-option" data-index="2">Module B runs in parallel with A and uses whatever resolves first</button>
+  <button class="quiz-option" data-index="3">Module B's execution is paused until A's top-level await completes</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<h2>Primary Sources</h2>
+<ul>
+  <li><a href="https://nodejs.org/api/fs.html#promises-api" target="_blank">Node.js fs Promises API — Official Docs</a></li>
+  <li><a href="https://gist.github.com/Rich-Harris/0b6f317657f5167663b493c722647221" target="_blank">Rich Harris — "Top-level await is a footgun" (2017, updated 2019)</a> — the gist that influenced the final TC39 spec</li>
+  <li><a href="https://github.com/tc39/proposal-top-level-await" target="_blank">TC39 Proposal: Top-Level Await</a> — the final spec (variant B)</li>
+  <li><a href="https://blog.openreplay.com/node-js-file-handling/" target="_blank">Modern File Handling in Node.js (OpenReplay, 2026)</a></li>
+</ul>
+
+<div class="followup">
+  <strong>Questions?</strong> Ask me about anything here — the nuances of the Edge Runtime in Next.js,
+  how to structure a full-stack app to avoid the "can't resolve fs" error, or strategies for
+  parallelizing startup in Node.js servers. I'm here to help.
+</div>
+
+<div class="nav-links">
+  <a href="0001-fs-three-apis.html">← Lesson 1: Three APIs</a>
+  <a href="0003-reading-writing-files.html">Lesson 3: Reading & Writing Files →</a>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

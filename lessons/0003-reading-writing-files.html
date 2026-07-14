@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 3: Reading & Writing Files — Encoding, Buffer vs String, Error Handling</title>
+  <link rel="stylesheet" href="../assets/style.css">
+  <link rel="stylesheet" href="../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Lesson 03</p>
+<h1>Reading & Writing Files</h1>
+<p class="subtitle">Encoding, Buffer vs String, and error handling by <code>error.code</code> — the patterns you'll use daily in full-stack apps.</p>
+
+<!-- ============================================ -->
+<h2>The Two Return Types of <code>readFile</code></h2>
+
+<p>
+  <code>readFile</code> does exactly one thing differently depending on whether you pass an encoding:
+</p>
+
+<table>
+  <thead>
+    <tr><th>Call</th><th>Returns</th><th>Use For</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>readFile(path, 'utf8')</code></td>
+      <td><strong>String</strong> — decoded text</td>
+      <td>JSON, config files, HTML, CSS, logs</td>
+    </tr>
+    <tr>
+      <td><code>readFile(path)</code></td>
+      <td><strong>Buffer</strong> — raw bytes</td>
+      <td>Images, PDFs, audio, binaries, encrypted data</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  This is the single most important decision you make when reading a file: <strong>am I
+  dealing with text or binary data?</strong>
+</p>
+
+<pre><code><span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="comment">// Text: pass encoding → get a string</span>
+<span class="keyword">const</span> json = <span class="keyword">await</span> <span class="function">readFile</span>(<span class="string">'package.json'</span>, <span class="string">'utf8'</span>);
+console.log(<span class="keyword">typeof</span> json); <span class="comment">// 'string'</span>
+console.log(json.length); <span class="comment">// character count</span>
+
+<span class="comment">// Binary: omit encoding → get a Buffer</span>
+<span class="keyword">const</span> image = <span class="keyword">await</span> <span class="function">readFile</span>(<span class="string">'logo.png'</span>);
+console.log(Buffer.isBuffer(image)); <span class="comment">// true</span>
+console.log(image.length);           <span class="comment">// byte count</span></code></pre>
+
+<!-- ============================================ -->
+<h2>What Is a Buffer? (The Frontend Analogy)</h2>
+
+<p>
+  Think of a <code>Buffer</code> as a fixed-length <code>Uint8Array</code> — because that's literally
+  what it is. In the browser, when you use <code>fetch</code> to download an image and call
+  <code>response.arrayBuffer()</code>, you get an <code>ArrayBuffer</code> — raw bytes. Node's <code>Buffer</code>
+  is the same concept, with extra convenience methods for encoding/decoding.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Concept</th><th>Browser Equivalent</th><th>Node.js</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Raw bytes</td>
+      <td><code>ArrayBuffer</code> / <code>Uint8Array</code></td>
+      <td><code>Buffer</code> (subclass of <code>Uint8Array</code>)</td>
+    </tr>
+    <tr>
+      <td>Decode bytes → string</td>
+      <td><code>new TextDecoder().decode(bytes)</code></td>
+      <td><code>buffer.toString('utf8')</code></td>
+    </tr>
+    <tr>
+      <td>Encode string → bytes</td>
+      <td><code>new TextEncoder().encode(str)</code></td>
+      <td><code>Buffer.from(str, 'utf8')</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <strong>Key insight:</strong> <code>buffer.length</code> is <em>byte count</em>, not character count.
+  The string <code>"café"</code> is 4 characters but <strong>5 bytes</strong> in UTF-8 (the <code>é</code> takes 2 bytes).
+  This distinction matters when you pre-allocate buffers or set <code>Content-Length</code> headers.
+  Use <code>Buffer.byteLength(str, 'utf8')</code> to get the true byte size of a string.
+</div>
+
+<!-- ============================================ -->
+<h2>Encodings You'll Actually Use</h2>
+
+<table>
+  <thead>
+    <tr><th>Encoding</th><th>When</th><th>Example</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>'utf8'</code></td>
+      <td>Text files (JSON, HTML, logs, configs)</td>
+      <td><code>readFile(path, 'utf8')</code></td>
+    </tr>
+    <tr>
+      <td><code>'base64'</code></td>
+      <td>Embedding binary in JSON/URLs</td>
+      <td><code>buffer.toString('base64')</code></td>
+    </tr>
+    <tr>
+      <td><code>'hex'</code></td>
+      <td>Debugging bytes, hash digests</td>
+      <td><code>hash.digest('hex')</code></td>
+    </tr>
+    <tr>
+      <td><code>'latin1'</code></td>
+      <td>Legacy 1-byte-per-char protocols</td>
+      <td>Rarely needed in new code</td>
+    </tr>
+    <tr>
+      <td>(none — omit encoding)</td>
+      <td>Binary data: images, audio, PDFs</td>
+      <td><code>readFile(path)</code> → Buffer</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  For 99% of full-stack work, you'll use <code>'utf8'</code> for text and omit encoding for binary.
+  The others show up at specific boundaries (e.g., converting an uploaded image to base64
+  for a JSON API response).
+</p>
+
+<!-- ============================================ -->
+<h2>Writing Files: <code>writeFile</code>, <code>appendFile</code>, <code>truncate</code></h2>
+
+<h3><code>writeFile</code> — Create or Overwrite</h3>
+<pre><code><span class="keyword">import</span> { writeFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">const</span> user = { name: <span class="string">'Mohamed'</span>, role: <span class="string">'fullstack'</span> };
+
+<span class="comment">// Creates the file if missing, completely replaces if it exists</span>
+<span class="keyword">await</span> <span class="function">writeFile</span>(
+  <span class="string">'user.json'</span>,
+  JSON.stringify(user, <span class="keyword">null</span>, <span class="number">2</span>),
+  <span class="string">'utf8'</span>
+);</code></pre>
+
+<h3><code>appendFile</code> — Add Without Replacing</h3>
+<pre><code><span class="keyword">import</span> { appendFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="comment">// Adds to end of file; creates it if missing</span>
+<span class="keyword">const</span> entry = <span class="string">`${new Date().toISOString()} — user created\n`</span>;
+<span class="keyword">await</span> <span class="function">appendFile</span>(<span class="string">'events.log'</span>, entry, <span class="string">'utf8'</span>);</code></pre>
+
+<h3>When to use which:</h3>
+<table>
+  <thead>
+    <tr><th>Operation</th><th>Method</th><th>Behavior</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Save config/data</td>
+      <td><code>writeFile</code></td>
+      <td>Replace entire contents</td>
+    </tr>
+    <tr>
+      <td>Append log entry</td>
+      <td><code>appendFile</code></td>
+      <td>Add to end, keep existing</td>
+    </tr>
+    <tr>
+      <td>Trim a file</td>
+      <td><code>truncate(path, n)</code></td>
+      <td>Keep first <em>n</em> bytes only</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>Error Handling: Branch on <code>error.code</code></h2>
+
+<p>
+  File operations fail with system errors. Every error carries a <code>.code</code> property — a
+  short string identifying what went wrong at the OS level. <strong>Never</strong> parse error messages.
+  <strong>Always</strong> branch on <code>error.code</code>.
+</p>
+
+<h3>The Error Codes You'll Handle Most</h3>
+<table>
+  <thead>
+    <tr><th>Code</th><th>Meaning</th><th>Typical Scenario</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>ENOENT</code></td>
+      <td>No such file or directory</td>
+      <td>File doesn't exist, typo in path</td>
+    </tr>
+    <tr>
+      <td><code>EACCES</code></td>
+      <td>Permission denied</td>
+      <td>Wrong file permissions, running as wrong user</td>
+    </tr>
+    <tr>
+      <td><code>EISDIR</code></td>
+      <td>Is a directory</td>
+      <td>Called <code>readFile</code> on a directory path</td>
+    </tr>
+    <tr>
+      <td><code>EEXIST</code></td>
+      <td>Already exists</td>
+      <td><code>mkdir</code> without <code>recursive: true</code></td>
+    </tr>
+    <tr>
+      <td><code>ENOSPC</code></td>
+      <td>No space left on device</td>
+      <td>Disk full during write</td>
+    </tr>
+    <tr>
+      <td><code>EMFILE</code></td>
+      <td>Too many open files</td>
+      <td>Leaked file handles, no <code>close()</code> in finally</td>
+    </tr>
+    <tr>
+      <td><code>ENOTDIR</code></td>
+      <td>Not a directory</td>
+      <td><code>readdir</code> on a file path</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>The Pattern: try/catch + switch on code</h3>
+<pre><code><span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">async function</span> <span class="function">loadConfig</span>(path) {
+  <span class="keyword">try</span> {
+    <span class="keyword">const</span> raw = <span class="keyword">await</span> <span class="function">readFile</span>(path, <span class="string">'utf8'</span>);
+    <span class="keyword">return</span> JSON.parse(raw);
+  } <span class="keyword">catch</span> (error) {
+    <span class="keyword">switch</span> (error.code) {
+      <span class="keyword">case</span> <span class="string">'ENOENT'</span>:
+        console.warn(<span class="string">`Config not found at ${path}, using defaults`</span>);
+        <span class="keyword">return</span> { port: <span class="number">3000</span>, host: <span class="string">'localhost'</span> };
+      <span class="keyword">case</span> <span class="string">'EACCES'</span>:
+        <span class="keyword">throw new</span> Error(<span class="string">`Permission denied reading ${path}`</span>);
+      <span class="keyword">default</span>:
+        <span class="comment">// SyntaxError from JSON.parse won't have .code</span>
+        <span class="comment">// Re-throw unexpected errors — don't swallow them</span>
+        <span class="keyword">throw</span> error;
+    }
+  }
+}</code></pre>
+
+<div class="callout danger">
+  <strong>Critical rule:</strong> Always re-throw errors you don't specifically handle. Swallowing
+  <code>ENOSPC</code> (disk full) or <code>EMFILE</code> (too many files) silently is a common production
+  failure mode — the real problem stays hidden while your app produces wrong results.
+</div>
+
+<h3>The "Check Then Act" Race Condition</h3>
+<p>
+  A common mistake: check if a file exists with <code>stat</code> or <code>access</code>, then read it.
+  Between the check and the read, another process can delete the file. This is called
+  a <strong>TOCTOU</strong> (Time-of-check-to-time-of-use) race condition.
+</p>
+
+<pre><code><span class="comment">// ❌ WRONG: race condition</span>
+<span class="keyword">import</span> { stat, readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">try</span> {
+  <span class="keyword">await</span> <span class="function">stat</span>(<span class="string">'config.json'</span>); <span class="comment">// file exists now...</span>
+} <span class="keyword">catch</span> {
+  <span class="comment">// doesn't exist, use defaults</span>
+}
+<span class="comment">// ...but by now it might be deleted!</span>
+<span class="keyword">const</span> data = <span class="keyword">await</span> <span class="function">readFile</span>(<span class="string">'config.json'</span>, <span class="string">'utf8'</span>); <span class="comment">// can still fail</span>
+
+<span class="comment">// ✅ RIGHT: just read and handle the error</span>
+<span class="keyword">try</span> {
+  <span class="keyword">const</span> data = <span class="keyword">await</span> <span class="function">readFile</span>(<span class="string">'config.json'</span>, <span class="string">'utf8'</span>);
+  <span class="comment">// process data</span>
+} <span class="keyword">catch</span> (err) {
+  <span class="keyword">if</span> (err.code === <span class="string">'ENOENT'</span>) {
+    <span class="comment">// file doesn't exist — handle it</span>
+  } <span class="keyword">else</span> {
+    <span class="keyword">throw</span> err;
+  }
+}</code></pre>
+
+<div class="callout">
+  <strong>The principle:</strong> Don't ask "does this file exist?" — just try to use it and
+  handle the failure. This is called <strong>EAFP</strong> (Easier to Ask Forgiveness than Permission)
+  and it eliminates TOCTOU races.
+</div>
+
+<!-- ============================================ -->
+<h2>Real-World Pattern: Safe JSON Config Loader</h2>
+
+<p>
+  Here's a production-quality config loader you'd use in a Node.js server or Next.js API route:
+</p>
+
+<pre><code><span class="keyword">import</span> { readFile, writeFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+<span class="keyword">import</span> { join } <span class="keyword">from</span> <span class="string">'node:path'</span>;
+
+<span class="keyword">const</span> CONFIG_PATH = <span class="function">join</span>(process.cwd(), <span class="string">'config.json'</span>);
+
+<span class="keyword">const</span> DEFAULTS = {
+  port: <span class="number">3000</span>,
+  host: <span class="string">'localhost'</span>,
+  logLevel: <span class="string">'info'</span>,
+};
+
+<span class="keyword">export async function</span> <span class="function">loadConfig</span>() {
+  <span class="keyword">try</span> {
+    <span class="keyword">const</span> raw = <span class="keyword">await</span> <span class="function">readFile</span>(CONFIG_PATH, <span class="string">'utf8'</span>);
+    <span class="keyword">const</span> parsed = JSON.parse(raw);
+    <span class="comment">// Merge with defaults so missing keys don't break the app</span>
+    <span class="keyword">return</span> { ...DEFAULTS, ...parsed };
+  } <span class="keyword">catch</span> (error) {
+    <span class="keyword">if</span> (error.code === <span class="string">'ENOENT'</span>) {
+      <span class="comment">// No config file — create one with defaults</span>
+      <span class="keyword">await</span> <span class="function">writeFile</span>(
+        CONFIG_PATH,
+        JSON.stringify(DEFAULTS, <span class="keyword">null</span>, <span class="number">2</span>),
+        <span class="string">'utf8'</span>
+      );
+      <span class="keyword">return</span> DEFAULTS;
+    }
+    <span class="keyword">if</span> (error <span class="keyword">instanceof</span> SyntaxError) {
+      console.error(<span class="string">'Config file has invalid JSON:'</span>, error.message);
+      <span class="keyword">return</span> DEFAULTS;
+    }
+    <span class="keyword">throw</span> error; <span class="comment">// EACCES, ENOSPC — let it crash visibly</span>
+  }
+}
+
+<span class="keyword">export async function</span> <span class="function">saveConfig</span>(config) {
+  <span class="keyword">await</span> <span class="function">writeFile</span>(
+    CONFIG_PATH,
+    JSON.stringify(config, <span class="keyword">null</span>, <span class="number">2</span>),
+    <span class="string">'utf8'</span>
+  );
+}</code></pre>
+
+<p>Notice the patterns:</p>
+<ul>
+  <li><strong>EAFP:</strong> Just read, handle ENOENT if it fails</li>
+  <li><strong>Separate error types:</strong> <code>error.code</code> for fs errors, <code>instanceof SyntaxError</code> for JSON parse errors</li>
+  <li><strong>Merge with defaults:</strong> Missing config keys don't crash the app</li>
+  <li><strong>Re-throw unknowns:</strong> Don't silently swallow permission or disk errors</li>
+</ul>
+
+<!-- ============================================ -->
+<h2>Writing Binary Data</h2>
+
+<p>
+  When handling file uploads or generating binary content (images, PDFs), you work with Buffers:
+</p>
+
+<pre><code><span class="keyword">import</span> { writeFile, readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="comment">// Writing binary — pass a Buffer, no encoding needed</span>
+<span class="keyword">const</span> imageBuffer = <span class="keyword">await</span> <span class="function">getUploadedImage</span>(); <span class="comment">// Buffer from request body</span>
+<span class="keyword">await</span> <span class="function">writeFile</span>(<span class="string">'uploads/avatar.png'</span>, imageBuffer);
+
+<span class="comment">// Reading binary → convert to base64 for JSON response</span>
+<span class="keyword">const</span> avatar = <span class="keyword">await</span> <span class="function">readFile</span>(<span class="string">'uploads/avatar.png'</span>);
+<span class="keyword">const</span> base64 = avatar.toString(<span class="string">'base64'</span>);
+<span class="keyword">const</span> dataUrl = <span class="string">`data:image/png;base64,${base64}`</span>;</code></pre>
+
+<!-- ============================================ -->
+<h2>The <code>Content-Length</code> Gotcha</h2>
+
+<p>
+  When setting HTTP headers, you need byte length, not string length:
+</p>
+
+<pre><code><span class="keyword">const</span> body = JSON.stringify({ message: <span class="string">'مرحبا'</span> }); <span class="comment">// Arabic text</span>
+
+<span class="comment">// ❌ WRONG: string.length counts characters (some are multi-byte)</span>
+res.setHeader(<span class="string">'Content-Length'</span>, body.length); <span class="comment">// WRONG!</span>
+
+<span class="comment">// ✅ RIGHT: Buffer.byteLength counts actual bytes</span>
+res.setHeader(<span class="string">'Content-Length'</span>, Buffer.byteLength(body, <span class="string">'utf8'</span>));</code></pre>
+
+<div class="callout warning">
+  <strong>This matters with non-ASCII text.</strong> Arabic, Chinese, Japanese, emoji — all take
+  multiple bytes per character in UTF-8. If your Content-Length is wrong, the client
+  truncates or hangs waiting for more bytes.
+</div>
+
+<!-- ============================================ -->
+<h2>Hands-On Exercise</h2>
+
+<p>
+  Create a file called <code>config-loader.js</code> in your project that:
+</p>
+<ol>
+  <li>Reads <code>config.json</code> using <code>node:fs/promises</code></li>
+  <li>If the file doesn't exist (<code>ENOENT</code>), creates it with default values</li>
+  <li>If the JSON is malformed, logs a warning and returns defaults</li>
+  <li>Prints the loaded config to the console</li>
+</ol>
+
+<p>Test it by running:</p>
+<pre><code><span class="comment"># First run: creates config.json with defaults</span>
+node config-loader.js
+
+<span class="comment"># Second run: reads the existing config.json</span>
+node config-loader.js
+
+<span class="comment"># Break it: edit config.json to be invalid JSON, run again</span>
+node config-loader.js</code></pre>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">What does <code>readFile('data.bin')</code> return when you omit the encoding parameter?</p>
+  <button class="quiz-option" data-index="0">A Buffer containing the raw bytes of the file</button>
+  <button class="quiz-option" data-index="1">A string with the file contents in UTF-8 encoding</button>
+  <button class="quiz-option" data-index="2">An ArrayBuffer that must be wrapped in a DataView</button>
+  <button class="quiz-option" data-index="3">A ReadableStream of the file's byte chunks</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">The string <code>"café"</code> is 4 characters. How many bytes is it in UTF-8?</p>
+  <button class="quiz-option" data-index="0">4 bytes — one byte per character always</button>
+  <button class="quiz-option" data-index="1">8 bytes — two bytes per character in UTF-8</button>
+  <button class="quiz-option" data-index="2">5 bytes — the accented é takes two bytes</button>
+  <button class="quiz-option" data-index="3">6 bytes — each non-ASCII char takes two extra</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">Why is "check if file exists, then read it" considered an anti-pattern?</p>
+  <button class="quiz-option" data-index="0">The check operation is slower than reading the file directly</button>
+  <button class="quiz-option" data-index="1">Another process can delete the file between the check and the read</button>
+  <button class="quiz-option" data-index="2">The stat function doesn't work with the promises API correctly</button>
+  <button class="quiz-option" data-index="3">Checking existence requires elevated filesystem permissions</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">You get an error with <code>error.code === 'EMFILE'</code>. What caused it?</p>
+  <button class="quiz-option" data-index="0">The file is larger than the maximum allowed Buffer size</button>
+  <button class="quiz-option" data-index="1">The file path contains invalid characters for the OS</button>
+  <button class="quiz-option" data-index="2">The disk ran out of storage space during the operation</button>
+  <button class="quiz-option" data-index="3">Too many files are open — file handles were not closed properly</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<h2>Primary Sources</h2>
+<ul>
+  <li><a href="https://nodejs.org/api/fs.html#fspromisesreadfilepath-options" target="_blank">Node.js <code>readFile</code> docs</a> — full options surface</li>
+  <li><a href="https://nodejs.org/api/buffer.html" target="_blank">Node.js Buffer API</a> — the authoritative reference</li>
+  <li><a href="https://nodejs.org/api/errors.html#common-system-errors" target="_blank">Node.js Common System Errors</a> — all error codes explained</li>
+  <li><a href="https://blog.openreplay.com/node-js-file-handling/" target="_blank">Modern File Handling in Node.js (OpenReplay, 2026)</a></li>
+  <li><a href="https://thelinuxcode.com/what-is-buffer-in-nodejs-a-practical-byte-level-guide/" target="_blank">What Is Buffer in Node.js? A Practical Guide (TheLinuxCode, 2026)</a></li>
+</ul>
+
+<div class="followup">
+  <strong>Questions?</strong> Ask me about Buffer allocation strategies, how to handle encoding
+  in Express request bodies, the difference between <code>writeFile</code> and streaming writes,
+  or anything else from this lesson. Next up: Streams & <code>pipeline()</code> for large files.
+</div>
+
+<div class="nav-links">
+  <a href="0002-fs-deep-questions.html">← Lesson 2: Deep Questions</a>
+  <a href="0004-streams-and-pipeline.html">Lesson 4: Streams & Pipeline →</a>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

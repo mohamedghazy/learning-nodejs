@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reference: Node.js fs Module Cheat Sheet</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<h1>Node.js <code>fs</code> Module — Quick Reference</h1>
+<p class="subtitle">The essential operations at a glance. All examples use <code>node:fs/promises</code> with ESM.</p>
+
+<h2>Imports</h2>
+<pre><code><span class="comment">// Promise API (default for server code)</span>
+<span class="keyword">import</span> { readFile, writeFile, appendFile, mkdir, rm, readdir, rename, stat, copyFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="comment">// Streams (for large files)</span>
+<span class="keyword">import</span> { createReadStream, createWriteStream } <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+<span class="keyword">import</span> { pipeline } <span class="keyword">from</span> <span class="string">'node:stream/promises'</span>;
+
+<span class="comment">// File handles (byte-level access)</span>
+<span class="keyword">import</span> { open } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="comment">// Path utilities (always use with fs)</span>
+<span class="keyword">import</span> { join, resolve, sep } <span class="keyword">from</span> <span class="string">'node:path'</span>;</code></pre>
+
+<h2>Common Operations</h2>
+<table>
+  <thead>
+    <tr><th>Operation</th><th>Method</th><th>Key Options</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Read file as string</td><td><code>readFile(path, 'utf8')</code></td><td>encoding: 'utf8'</td></tr>
+    <tr><td>Read file as bytes</td><td><code>readFile(path)</code></td><td>Returns Buffer</td></tr>
+    <tr><td>Write/overwrite file</td><td><code>writeFile(path, data, 'utf8')</code></td><td>Creates if missing</td></tr>
+    <tr><td>Append to file</td><td><code>appendFile(path, data, 'utf8')</code></td><td>Creates if missing</td></tr>
+    <tr><td>Create directories</td><td><code>mkdir(path, { recursive: true })</code></td><td>No error if exists</td></tr>
+    <tr><td>Remove file/directory</td><td><code>rm(path, { recursive: true, force: true })</code></td><td>force: no error if missing</td></tr>
+    <tr><td>List directory</td><td><code>readdir(path, { withFileTypes: true })</code></td><td>Returns Dirent objects</td></tr>
+    <tr><td>Rename/move</td><td><code>rename(oldPath, newPath)</code></td><td>—</td></tr>
+    <tr><td>File info</td><td><code>stat(path)</code></td><td>Returns size, dates, type</td></tr>
+    <tr><td>Copy file</td><td><code>copyFile(src, dest)</code></td><td>—</td></tr>
+    <tr><td>Check existence</td><td><code>stat(path)</code> in try/catch</td><td>ENOENT = doesn't exist</td></tr>
+  </tbody>
+</table>
+
+<h2>Error Codes</h2>
+<table>
+  <thead>
+    <tr><th>Code</th><th>Meaning</th><th>Common Cause</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>ENOENT</code></td><td>File/dir does not exist</td><td>Typo in path, missing file</td></tr>
+    <tr><td><code>EACCES</code></td><td>Permission denied</td><td>Wrong ownership/permissions</td></tr>
+    <tr><td><code>EISDIR</code></td><td>Is a directory</td><td>readFile on a directory</td></tr>
+    <tr><td><code>ENOSPC</code></td><td>No space left</td><td>Disk full</td></tr>
+    <tr><td><code>EMFILE</code></td><td>Too many open files</td><td>Leaked file handles</td></tr>
+    <tr><td><code>EEXIST</code></td><td>Already exists</td><td>mkdir without recursive</td></tr>
+  </tbody>
+</table>
+
+<h2>Decision Rule</h2>
+<table>
+  <thead>
+    <tr><th>Scenario</th><th>Use</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Server / concurrent code</td><td><code>node:fs/promises</code> + async/await</td></tr>
+    <tr><td>Large files / unknown size</td><td>Streams + <code>pipeline()</code></td></tr>
+    <tr><td>Byte-level positional I/O</td><td>File handles (<code>open/read/close</code>)</td></tr>
+    <tr><td>CLI scripts / build tools</td><td>Sync methods acceptable</td></tr>
+  </tbody>
+</table>
+
+<h2>Path Safety Pattern</h2>
+<pre><code><span class="keyword">import</span> { resolve, sep } <span class="keyword">from</span> <span class="string">'node:path'</span>;
+
+<span class="keyword">const</span> baseDir = <span class="function">resolve</span>(<span class="string">'uploads'</span>);
+<span class="keyword">const</span> target = <span class="function">resolve</span>(baseDir, userInput);
+
+<span class="keyword">if</span> (!target.startsWith(baseDir + sep)) {
+  <span class="keyword">throw new</span> Error(<span class="string">'Path traversal blocked'</span>);
+}</code></pre>
+
+<h2>Buffer vs String Decision</h2>
+<table>
+  <thead>
+    <tr><th>Data Type</th><th>Read With</th><th>Returns</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Text (JSON, HTML, config)</td><td><code>readFile(path, 'utf8')</code></td><td>String</td></tr>
+    <tr><td>Binary (image, PDF, audio)</td><td><code>readFile(path)</code></td><td>Buffer</td></tr>
+  </tbody>
+</table>
+
+<h2>Encoding Quick Reference</h2>
+<table>
+  <thead>
+    <tr><th>Encoding</th><th>Use For</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>'utf8'</code></td><td>Text files (default for all text)</td></tr>
+    <tr><td><code>'base64'</code></td><td>Embedding binary in JSON/URLs</td></tr>
+    <tr><td><code>'hex'</code></td><td>Debugging bytes, hash outputs</td></tr>
+    <tr><td>(omit)</td><td>Binary data — returns raw Buffer</td></tr>
+  </tbody>
+</table>
+
+<h2>Error Handling Pattern</h2>
+<pre><code><span class="keyword">try</span> {
+  <span class="keyword">const</span> data = <span class="keyword">await</span> <span class="function">readFile</span>(path, <span class="string">'utf8'</span>);
+} <span class="keyword">catch</span> (err) {
+  <span class="keyword">if</span> (err.code === <span class="string">'ENOENT'</span>) { <span class="comment">/* file missing */</span> }
+  <span class="keyword">else if</span> (err.code === <span class="string">'EACCES'</span>) { <span class="comment">/* permission denied */</span> }
+  <span class="keyword">else</span> <span class="keyword">throw</span> err; <span class="comment">// always re-throw unknowns</span>
+}</code></pre>
+
+<div class="nav-links">
+  <span>Reference document — updated as lessons progress</span>
+</div>
+
+</body>
+</html>

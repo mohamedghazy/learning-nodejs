@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 1: The fs Module — Three APIs, One Decision</title>
+  <link rel="stylesheet" href="../assets/style.css">
+  <link rel="stylesheet" href="../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Lesson 01</p>
+<h1>The fs Module — Three APIs, One Decision</h1>
+<p class="subtitle">Understanding why <code>node:fs/promises</code> is your default, and when the others earn their place.</p>
+
+<h2>The Mental Model</h2>
+<p>
+  Node.js gives you <strong>one</strong> file system module (<code>node:fs</code>) that exposes
+  the same operations through <strong>three</strong> different API surfaces. As a frontend dev,
+  you've already internalized a similar pattern: <code>fetch</code> returns a Promise,
+  <code>XMLHttpRequest</code> uses callbacks, and neither blocks the main thread. The <code>fs</code>
+  module works the same way — except it <em>also</em> ships a synchronous API that blocks
+  the event loop entirely.
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>API Surface</th>
+      <th>Import</th>
+      <th>Style</th>
+      <th>Blocks Event Loop?</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Promise (modern default)</td>
+      <td><code>node:fs/promises</code></td>
+      <td><code>async/await</code></td>
+      <td>No</td>
+    </tr>
+    <tr>
+      <td>Callback (legacy)</td>
+      <td><code>node:fs</code></td>
+      <td>Error-first callbacks</td>
+      <td>No</td>
+    </tr>
+    <tr>
+      <td>Synchronous</td>
+      <td><code>node:fs</code> (<code>*Sync</code> methods)</td>
+      <td>Returns directly</td>
+      <td><strong>Yes</strong></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>The <code>node:</code> Prefix</h2>
+<p>
+  Always import with the <code>node:</code> prefix. It explicitly marks the import as a Node.js
+  built-in and <strong>cannot be shadowed</strong> by an npm package of the same name. This is a
+  security and clarity improvement — an attacker can't publish a package named <code>fs</code>
+  and have your code accidentally pull it in.
+</p>
+
+<pre><code><span class="comment">// ✓ Modern — explicit, secure</span>
+<span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="comment">// ✗ Legacy — works but ambiguous</span>
+<span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'fs/promises'</span>;</code></pre>
+
+<h2>API 1: <code>node:fs/promises</code> — Your Default</h2>
+<p>
+  The promise-based API became stable in Node 14. It integrates cleanly with
+  <code>async/await</code> and top-level <code>await</code> (available in ES modules since Node 14.8).
+  This is what you use for <strong>all server-side code</strong>.
+</p>
+
+<pre><code><span class="keyword">import</span> { readFile, writeFile, mkdir } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="comment">// Top-level await — no wrapper needed in ESM</span>
+<span class="keyword">const</span> config = JSON.parse(
+  <span class="keyword">await</span> <span class="function">readFile</span>(<span class="string">'config.json'</span>, <span class="string">'utf8'</span>)
+);
+
+<span class="keyword">await</span> <span class="function">mkdir</span>(<span class="string">'output/reports'</span>, { recursive: <span class="keyword">true</span> });
+
+<span class="keyword">await</span> <span class="function">writeFile</span>(
+  <span class="string">'output/reports/summary.json'</span>,
+  JSON.stringify(config, <span class="keyword">null</span>, <span class="number">2</span>),
+  <span class="string">'utf8'</span>
+);</code></pre>
+
+<div class="callout">
+  <strong>Why not the callback API?</strong>
+  The callback API predates Promises and leads to deeply nested error-first callbacks.
+  It still works and you'll see it in older code, but for new code it offers no advantage
+  over <code>fs/promises</code>. The Node.js docs themselves recommend the promise API for new projects.
+</div>
+
+<h2>API 2: Callback API — Legacy, Still Async</h2>
+<p>
+  The callback API is the original <code>fs</code> surface. It doesn't block the event loop
+  (good), but it produces the "callback pyramid" you've seen in pre-Promise Node code.
+  You'll encounter it in older codebases and libraries.
+</p>
+
+<pre><code><span class="keyword">import</span> fs <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+
+<span class="comment">// Error-first callback pattern</span>
+fs.<span class="function">readFile</span>(<span class="string">'config.json'</span>, <span class="string">'utf8'</span>, (err, data) => {
+  <span class="keyword">if</span> (err) {
+    console.error(<span class="string">'Failed:'</span>, err.code);
+    <span class="keyword">return</span>;
+  }
+  console.log(JSON.parse(data));
+});</code></pre>
+
+<p>
+  Your <code>app.js</code> currently uses this pattern with <code>fs.mkdir</code>. It works, but the
+  promise version is cleaner and composable:
+</p>
+
+<pre><code><span class="comment">// Your current code (callback)</span>
+fs.<span class="function">mkdir</span>(<span class="string">"src"</span>, (err) => {
+  <span class="keyword">if</span> (err) <span class="keyword">return</span> console.log(err);
+  console.log(<span class="string">"done"</span>);
+});
+
+<span class="comment">// Modern equivalent (promise)</span>
+<span class="keyword">import</span> { mkdir } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">try</span> {
+  <span class="keyword">await</span> <span class="function">mkdir</span>(<span class="string">'src'</span>, { recursive: <span class="keyword">true</span> });
+  console.log(<span class="string">'done'</span>);
+} <span class="keyword">catch</span> (err) {
+  console.error(err.code);
+}</code></pre>
+
+<h2>API 3: Synchronous — CLI Scripts Only</h2>
+<p>
+  Every async method has a <code>*Sync</code> counterpart that <strong>blocks the entire event loop</strong>
+  until the I/O completes. In a server handling 100 concurrent requests, one <code>readFileSync</code>
+  stalls <em>all of them</em>.
+</p>
+
+<pre><code><span class="keyword">import</span> { readFileSync } <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+
+<span class="comment">// Acceptable: one-off CLI script, no concurrency</span>
+<span class="keyword">const</span> pkg = JSON.parse(<span class="function">readFileSync</span>(<span class="string">'package.json'</span>, <span class="string">'utf8'</span>));
+console.log(pkg.version);</code></pre>
+
+<div class="callout warning">
+  <strong>The rule:</strong> If the process serves more than one thing at a time (HTTP server,
+  WebSocket handler, queue consumer), use the async promise API — <em>always</em>.
+  Sync methods are acceptable only in build scripts, CLI tools, and one-shot utilities.
+</div>
+
+<h2>The Decision Flowchart</h2>
+<p>When you reach for <code>fs</code>, ask yourself:</p>
+<ol>
+  <li><strong>Is this server code handling concurrent requests?</strong> → <code>node:fs/promises</code>, never sync.</li>
+  <li><strong>Is the file large or of unknown size?</strong> → Streams (<code>createReadStream</code> + <code>pipeline</code>). We'll cover this in Lesson 3.</li>
+  <li><strong>Do I need byte-level positional access?</strong> → File handles (<code>open/read/close</code>). Lesson 4.</li>
+  <li><strong>Is this a CLI/build script that runs and exits?</strong> → Sync methods are fine for simplicity.</li>
+</ol>
+
+<h2>Try It: Refactor Your <code>app.js</code></h2>
+<p>
+  Open <code>app.js</code> and refactor it from the callback API to <code>node:fs/promises</code>.
+  Here's the target:
+</p>
+
+<pre><code><span class="keyword">import</span> { mkdir } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="comment">// recursive: true means no error if it already exists (like mkdir -p)</span>
+<span class="keyword">await</span> <span class="function">mkdir</span>(<span class="string">'src'</span>, { recursive: <span class="keyword">true</span> });
+console.log(<span class="string">'src created'</span>);
+
+<span class="keyword">await</span> <span class="function">mkdir</span>(<span class="string">'src/components'</span>, { recursive: <span class="keyword">true</span> });
+console.log(<span class="string">'src/components created'</span>);</code></pre>
+
+<p>Run it with:</p>
+<pre><code>node app.js</code></pre>
+
+<p>
+  Notice: with <code>{ recursive: true }</code>, you don't need to create <code>src</code> before
+  <code>src/components</code>. A single <code>mkdir('src/components', { recursive: true })</code>
+  creates both levels. This mirrors <code>mkdir -p</code> in the shell.
+</p>
+
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">You're writing an Express route handler that reads a user's uploaded config file. Which API do you use?</p>
+  <button class="quiz-option" data-index="0">readFileSync from node:fs</button>
+  <button class="quiz-option" data-index="1">readFile from node:fs/promises</button>
+  <button class="quiz-option" data-index="2">readFile from node:fs (callback)</button>
+  <button class="quiz-option" data-index="3">createReadStream from node:fs</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">A <code>readFileSync</code> call in an HTTP handler will...</p>
+  <button class="quiz-option" data-index="0">run in a worker thread automatically</button>
+  <button class="quiz-option" data-index="1">only block the current request handler</button>
+  <button class="quiz-option" data-index="2">block all concurrent requests on the server</button>
+  <button class="quiz-option" data-index="3">throw an error in async contexts by default</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">What does the <code>node:</code> prefix in <code>'node:fs/promises'</code> guarantee?</p>
+  <button class="quiz-option" data-index="0">The import cannot be shadowed by an npm package</button>
+  <button class="quiz-option" data-index="1">The module loads faster than without the prefix</button>
+  <button class="quiz-option" data-index="2">TypeScript types are included automatically</button>
+  <button class="quiz-option" data-index="3">The module uses the latest API version only</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<h2>Primary Source</h2>
+<p>
+  Read the official <a href="https://nodejs.org/api/fs.html#promises-api" target="_blank">Node.js fs Promises API documentation</a>
+  — it's the authoritative reference and covers every option and edge case.
+</p>
+
+<div class="followup">
+  <strong>Questions?</strong> Ask me anything that's unclear — why the callback API still exists,
+  how this relates to Next.js API routes, edge cases with top-level await, or anything else.
+  I'm your teacher, use me.
+</div>
+
+<div class="nav-links">
+  <span>← (start)</span>
+  <a href="0002-fs-deep-questions.html">fs-deep-questions →</a>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

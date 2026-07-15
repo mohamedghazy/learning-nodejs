@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 4: Streams & Pipeline — Handling Large Files With Constant Memory</title>
+  <link rel="stylesheet" href="../assets/style.css">
+  <link rel="stylesheet" href="../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Lesson 04</p>
+<h1>Streams & Pipeline</h1>
+<p class="subtitle">Process files of any size with constant memory. The pattern that separates production code from tutorial code.</p>
+
+<!-- ============================================ -->
+<h2>Why Streams Exist</h2>
+
+<p>
+  You already know from Lesson 3 that <code>readFile</code> loads the <strong>entire file</strong> into memory.
+  That's fine for a 50KB config file. But what about:
+</p>
+<ul>
+  <li>A 2GB server log you need to analyze?</li>
+  <li>A user uploading a 500MB video?</li>
+  <li>An API response streaming a CSV export with 10 million rows?</li>
+</ul>
+
+<p>
+  <code>readFile</code> on a 2GB file allocates 2GB of RAM. Your server handles 10 concurrent
+  requests like this — congratulations, you need 20GB of RAM (and you'll hit the 2GB libuv
+  limit anyway and crash). Streams solve this by processing data <strong>chunk by chunk</strong> — only
+  a small piece lives in memory at any time.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Approach</th><th>Memory for 2GB file</th><th>Works?</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>readFile</code></td>
+      <td>~2GB</td>
+      <td>❌ Crashes (libuv 2GB limit)</td>
+    </tr>
+    <tr>
+      <td>Stream pipeline</td>
+      <td>~64KB – 1MB (configurable)</td>
+      <td>✅ Constant memory</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>The Mental Model: Water Pipes</h2>
+
+<p>
+  Think of streams like plumbing. Data flows from a <strong>source</strong> (faucet), through
+  <strong>transforms</strong> (filters), into a <strong>destination</strong> (drain):
+</p>
+
+<pre><code><span class="comment">// The stream pipeline pattern:</span>
+<span class="comment">//</span>
+<span class="comment">//   [Readable]  →  [Transform]  →  [Transform]  →  [Writable]</span>
+<span class="comment">//    (source)       (filter)       (modify)       (destination)</span>
+<span class="comment">//</span>
+<span class="comment">//  Example: Read log file → filter errors → format CSV → write report</span></code></pre>
+
+<p>Node.js has four stream types:</p>
+<table>
+  <thead>
+    <tr><th>Type</th><th>Role</th><th>Examples</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Readable</strong></td>
+      <td>Source of data</td>
+      <td><code>fs.createReadStream()</code>, <code>http.IncomingMessage</code> (request body)</td>
+    </tr>
+    <tr>
+      <td><strong>Writable</strong></td>
+      <td>Destination for data</td>
+      <td><code>fs.createWriteStream()</code>, <code>http.ServerResponse</code></td>
+    </tr>
+    <tr>
+      <td><strong>Transform</strong></td>
+      <td>Modify data in transit</td>
+      <td><code>zlib.createGzip()</code>, custom parsers/filters</td>
+    </tr>
+    <tr>
+      <td><strong>Duplex</strong></td>
+      <td>Both read and write</td>
+      <td>TCP sockets (<code>net.Socket</code>)</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  As a full-stack dev, you'll mostly <em>use</em> Readable and Writable streams created by Node APIs,
+  and occasionally write custom Transform streams. The stream plumbing connects them.
+</p>
+
+<!-- ============================================ -->
+<h2><code>pipeline()</code> — The Right Way to Connect Streams</h2>
+
+<p>
+  The <code>pipeline</code> function from <code>node:stream/promises</code> is your go-to. It:
+</p>
+<ul>
+  <li>Connects a chain of streams (readable → transforms → writable)</li>
+  <li>Handles <strong>backpressure</strong> automatically (pauses fast readers when writers are slow)</li>
+  <li>Handles <strong>errors</strong> — destroys all streams if any one fails (no leaked file descriptors)</li>
+  <li>Returns a <strong>Promise</strong> — works with async/await</li>
+</ul>
+
+<pre><code><span class="keyword">import</span> { createReadStream, createWriteStream } <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+<span class="keyword">import</span> { pipeline } <span class="keyword">from</span> <span class="string">'node:stream/promises'</span>;
+
+<span class="comment">// Copy a file of any size using constant memory (~64KB)</span>
+<span class="keyword">await</span> <span class="function">pipeline</span>(
+  <span class="function">createReadStream</span>(<span class="string">'huge-input.log'</span>),
+  <span class="function">createWriteStream</span>(<span class="string">'huge-output.log'</span>)
+);</code></pre>
+
+<div class="callout danger">
+  <strong>Never use <code>.pipe()</code> in production.</strong> The older <code>readable.pipe(writable)</code> method
+  does NOT destroy streams on error — you'll leak file descriptors. Always use <code>pipeline()</code>
+  from <code>node:stream/promises</code>.
+</div>
+
+<!-- ============================================ -->
+<h2>Backpressure: Why Streams Don't Blow Up Memory</h2>
+
+<p>
+  Backpressure is the mechanism that keeps a fast reader from overwhelming a slow writer.
+  Imagine reading from a fast SSD but writing to a slow network connection:
+</p>
+
+<ul>
+  <li>The writable stream has an internal buffer (controlled by <code>highWaterMark</code>)</li>
+  <li>When the buffer fills up, the readable stream <strong>pauses</strong></li>
+  <li>When the buffer drains, the readable stream <strong>resumes</strong></li>
+  <li>Memory stays bounded no matter how fast the source or how slow the destination</li>
+</ul>
+
+<pre><code><span class="comment">// The highWaterMark controls the buffer threshold</span>
+<span class="comment">// File read streams default to 64KB (not the generic 16KB)</span>
+
+<span class="function">createReadStream</span>(<span class="string">'data.bin'</span>, { highWaterMark: <span class="number">64</span> * <span class="number">1024</span> })  <span class="comment">// 64KB (default)</span>
+<span class="function">createReadStream</span>(<span class="string">'data.bin'</span>, { highWaterMark: <span class="number">1024</span> * <span class="number">1024</span> }) <span class="comment">// 1MB (faster, more RAM)</span></code></pre>
+
+<p>
+  <code>pipeline()</code> manages all of this for you. You don't need to manually handle
+  <code>'drain'</code> events or pause/resume logic.
+</p>
+
+<!-- ============================================ -->
+<h2>Real-World Pattern 1: Compress and Serve a File</h2>
+
+<p>
+  A common Express/Node server pattern — stream a large file to the client with gzip compression:
+</p>
+
+<pre><code><span class="keyword">import</span> { createReadStream } <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+<span class="keyword">import</span> { pipeline } <span class="keyword">from</span> <span class="string">'node:stream/promises'</span>;
+<span class="keyword">import</span> { createGzip } <span class="keyword">from</span> <span class="string">'node:zlib'</span>;
+<span class="keyword">import</span> http <span class="keyword">from</span> <span class="string">'node:http'</span>;
+
+<span class="keyword">const</span> server = http.<span class="function">createServer</span>(<span class="keyword">async</span> (req, res) => {
+  res.setHeader(<span class="string">'Content-Encoding'</span>, <span class="string">'gzip'</span>);
+  res.setHeader(<span class="string">'Content-Type'</span>, <span class="string">'text/plain'</span>);
+
+  <span class="keyword">try</span> {
+    <span class="keyword">await</span> <span class="function">pipeline</span>(
+      <span class="function">createReadStream</span>(<span class="string">'server.log'</span>),  <span class="comment">// Readable: file</span>
+      <span class="function">createGzip</span>(),                      <span class="comment">// Transform: compress</span>
+      res                                 <span class="comment">// Writable: HTTP response</span>
+    );
+  } <span class="keyword">catch</span> (err) {
+    <span class="keyword">if</span> (!res.headersSent) {
+      res.statusCode = <span class="number">500</span>;
+      res.end(<span class="string">'Internal Server Error'</span>);
+    }
+  }
+});
+
+server.listen(<span class="number">3000</span>);</code></pre>
+
+<p>
+  This streams a file of <strong>any size</strong> to the client, compresses it on the fly, and uses
+  constant memory. The HTTP response object (<code>res</code>) is itself a Writable stream — so
+  <code>pipeline</code> connects directly to it.
+</p>
+
+<!-- ============================================ -->
+<h2>Real-World Pattern 2: Copy a File</h2>
+
+<p>The simplest possible stream pipeline — a file copy:</p>
+
+<pre><code><span class="keyword">import</span> { createReadStream, createWriteStream } <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+<span class="keyword">import</span> { pipeline } <span class="keyword">from</span> <span class="string">'node:stream/promises'</span>;
+
+<span class="keyword">async function</span> <span class="function">copyFile</span>(src, dest) {
+  <span class="keyword">await</span> <span class="function">pipeline</span>(
+    <span class="function">createReadStream</span>(src),
+    <span class="function">createWriteStream</span>(dest)
+  );
+}
+
+<span class="keyword">await</span> <span class="function">copyFile</span>(<span class="string">'backup.sql'</span>, <span class="string">'backup-copy.sql'</span>);</code></pre>
+
+<div class="callout">
+  <strong>Note:</strong> For simple file copies, <code>copyFile</code> from <code>node:fs/promises</code> is simpler
+  and uses OS-level optimizations. Use streams when you need to <em>transform</em> the data
+  in transit (compress, parse, filter, encrypt).
+</div>
+
+<!-- ============================================ -->
+<h2>Real-World Pattern 3: Process a Large Log File</h2>
+
+<p>
+  This is the pattern you'll use in full-stack apps — process a large file line by line
+  using constant memory. We'll use the modern <code>for await...of</code> syntax with
+  <code>readline</code>:
+</p>
+
+<pre><code><span class="keyword">import</span> { createReadStream } <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+<span class="keyword">import</span> { createInterface } <span class="keyword">from</span> <span class="string">'node:readline'</span>;
+
+<span class="keyword">const</span> rl = <span class="function">createInterface</span>({
+  input: <span class="function">createReadStream</span>(<span class="string">'server.log'</span>),
+  crlfDelay: Infinity, <span class="comment">// treat \r\n as a single line break</span>
+});
+
+<span class="keyword">let</span> errorCount = <span class="number">0</span>;
+
+<span class="keyword">for await</span> (<span class="keyword">const</span> line <span class="keyword">of</span> rl) {
+  <span class="keyword">const</span> entry = JSON.parse(line);
+  <span class="keyword">if</span> (entry.level === <span class="string">'error'</span>) {
+    errorCount++;
+  }
+}
+
+console.log(<span class="string">`Found ${errorCount} errors`</span>);</code></pre>
+
+<p>
+  <code>for await...of</code> on a readline interface gives you one line at a time — no matter how
+  large the file. Memory stays flat.
+</p>
+
+<!-- ============================================ -->
+<h2>Real-World Pattern 4: Custom Transform Stream</h2>
+
+<p>
+  When you need to <em>modify</em> data as it flows through a pipeline, you write a Transform
+  stream. Here's one that filters JSON log lines to only pass through errors:
+</p>
+
+<pre><code><span class="keyword">import</span> { Transform } <span class="keyword">from</span> <span class="string">'node:stream'</span>;
+<span class="keyword">import</span> { createReadStream, createWriteStream } <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+<span class="keyword">import</span> { pipeline } <span class="keyword">from</span> <span class="string">'node:stream/promises'</span>;
+
+<span class="comment">// Custom Transform: parse JSON lines and filter errors</span>
+<span class="keyword">const</span> errorFilter = <span class="keyword">new</span> <span class="function">Transform</span>({
+  <span class="function">transform</span>(chunk, encoding, callback) {
+    <span class="keyword">const</span> line = chunk.toString();
+    <span class="keyword">try</span> {
+      <span class="keyword">const</span> entry = JSON.parse(line);
+      <span class="keyword">if</span> (entry.level === <span class="string">'error'</span>) {
+        <span class="comment">// push() sends data downstream</span>
+        <span class="keyword">this</span>.push(line + <span class="string">'\n'</span>);
+      }
+      <span class="comment">// If we don't push, the chunk is dropped (filtered out)</span>
+    } <span class="keyword">catch</span> {
+      <span class="comment">// Skip malformed lines</span>
+    }
+    <span class="function">callback</span>(); <span class="comment">// Signal: ready for next chunk</span>
+  }
+});
+
+<span class="keyword">await</span> <span class="function">pipeline</span>(
+  <span class="function">createReadStream</span>(<span class="string">'server.log'</span>),
+  errorFilter,
+  <span class="function">createWriteStream</span>(<span class="string">'errors-only.log'</span>)
+);</code></pre>
+
+<p>The Transform pattern:</p>
+<ul>
+  <li><code>this.push(data)</code> — sends data downstream (call multiple times or zero times)</li>
+  <li><code>callback()</code> — signals you're ready for the next chunk (must always be called)</li>
+  <li><code>callback(error)</code> — signals an error and stops the pipeline</li>
+</ul>
+
+<!-- ============================================ -->
+<h2>When to Use Streams vs <code>readFile</code></h2>
+
+<table>
+  <thead>
+    <tr><th>Scenario</th><th>Use</th><th>Why</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Small files (&lt; 50MB), known size</td>
+      <td><code>readFile</code></td>
+      <td>Simpler code, file fits comfortably in memory</td>
+    </tr>
+    <tr>
+      <td>Large files (100MB+)</td>
+      <td>Streams</td>
+      <td>Constant memory regardless of file size</td>
+    </tr>
+    <tr>
+      <td>Unknown file size (user uploads)</td>
+      <td>Streams</td>
+      <td>Can't predict memory needed</td>
+    </tr>
+    <tr>
+      <td>Need to transform data in transit</td>
+      <td>Streams</td>
+      <td>Process while reading, no intermediate copies</td>
+    </tr>
+    <tr>
+      <td>Serving files over HTTP</td>
+      <td>Streams</td>
+      <td>Start sending before file is fully read (lower TTFB)</td>
+    </tr>
+    <tr>
+      <td>JSON config, small text files</td>
+      <td><code>readFile</code></td>
+      <td>Need the whole file to parse anyway</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <strong>Rule of thumb:</strong> If the file could be larger than ~100MB, or its size is unknown
+  (user-provided content), default to streams. The code is slightly more complex but it
+  won't crash under load.
+</div>
+
+<!-- ============================================ -->
+<h2>Important Gotchas</h2>
+
+<h3>1. Streams live on <code>node:fs</code>, not <code>node:fs/promises</code></h3>
+<p>
+  <code>createReadStream</code> and <code>createWriteStream</code> are on the <strong>callback-based</strong>
+  <code>node:fs</code> import. But you combine them with <code>pipeline</code> from
+  <code>node:stream/promises</code> — which gives you the async/await interface:
+</p>
+
+<pre><code><span class="comment">// This is the correct import pattern:</span>
+<span class="keyword">import</span> { createReadStream, createWriteStream } <span class="keyword">from</span> <span class="string">'node:fs'</span>;         <span class="comment">// streams</span>
+<span class="keyword">import</span> { pipeline } <span class="keyword">from</span> <span class="string">'node:stream/promises'</span>;  <span class="comment">// async pipeline</span></code></pre>
+
+<h3>2. Stream Chunks Don't Respect Boundaries</h3>
+<p>
+  A chunk from <code>createReadStream</code> is just a block of bytes — it can split mid-line,
+  mid-word, or mid-UTF8 character. If you need line-by-line processing, use
+  <code>readline.createInterface()</code> or write a custom line-splitter Transform.
+</p>
+
+<h3>3. Error Handling Is Automatic With <code>pipeline()</code></h3>
+<p>
+  A single <code>try/catch</code> around <code>await pipeline(...)</code> catches errors from <strong>any</strong>
+  stream in the chain. If the readable fails (file not found), or the writable fails
+  (disk full), or a transform throws — all streams are destroyed and the error
+  propagates to your catch block.
+</p>
+
+<pre><code><span class="keyword">try</span> {
+  <span class="keyword">await</span> <span class="function">pipeline</span>(
+    <span class="function">createReadStream</span>(<span class="string">'input.log'</span>),
+    <span class="function">createGzip</span>(),
+    <span class="function">createWriteStream</span>(<span class="string">'output.log.gz'</span>)
+  );
+} <span class="keyword">catch</span> (err) {
+  <span class="keyword">if</span> (err.code === <span class="string">'ENOENT'</span>) {
+    console.error(<span class="string">'Input file not found'</span>);
+  } <span class="keyword">else if</span> (err.code === <span class="string">'ENOSPC'</span>) {
+    console.error(<span class="string">'Disk full'</span>);
+  } <span class="keyword">else</span> {
+    <span class="keyword">throw</span> err;
+  }
+}</code></pre>
+
+<h3>4. <code>highWaterMark</code> Tuning</h3>
+<table>
+  <thead>
+    <tr><th>Stream Type</th><th>Default <code>highWaterMark</code></th><th>When to Change</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>File read stream</td>
+      <td>64KB</td>
+      <td>Increase for large sequential reads (1MB+)</td>
+    </tr>
+    <tr>
+      <td>Generic readable</td>
+      <td>16KB</td>
+      <td>Rarely needs changing</td>
+    </tr>
+    <tr>
+      <td>Object mode stream</td>
+      <td>16 objects</td>
+      <td>Lower to apply backpressure sooner</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>Hands-On Exercise</h2>
+
+<p>
+  Create a script called <code>compress-file.js</code> that takes a filename argument and
+  creates a gzipped copy:
+</p>
+
+<pre><code><span class="comment">// compress-file.js</span>
+<span class="comment">// Usage: node compress-file.js server.log</span>
+<span class="comment">// Output: server.log.gz</span>
+
+<span class="keyword">import</span> { createReadStream, createWriteStream } <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+<span class="keyword">import</span> { pipeline } <span class="keyword">from</span> <span class="string">'node:stream/promises'</span>;
+<span class="keyword">import</span> { createGzip } <span class="keyword">from</span> <span class="string">'node:zlib'</span>;
+
+<span class="keyword">const</span> input = process.argv[<span class="number">2</span>];
+
+<span class="keyword">if</span> (!input) {
+  console.error(<span class="string">'Usage: node compress-file.js &lt;filename&gt;'</span>);
+  process.exit(<span class="number">1</span>);
+}
+
+<span class="keyword">try</span> {
+  <span class="keyword">await</span> <span class="function">pipeline</span>(
+    <span class="function">createReadStream</span>(input),
+    <span class="function">createGzip</span>(),
+    <span class="function">createWriteStream</span>(<span class="string">`${input}.gz`</span>)
+  );
+  console.log(<span class="string">`✓ Compressed: ${input} → ${input}.gz`</span>);
+} <span class="keyword">catch</span> (err) {
+  console.error(<span class="string">`✗ Failed: ${err.message}`</span>);
+  process.exit(<span class="number">1</span>);
+}</code></pre>
+
+<p>Try it:</p>
+<pre><code><span class="comment"># Create a test file</span>
+node -e "import('node:fs').then(fs => fs.writeFileSync('test.txt', 'hello '.repeat(100000)))"
+node compress-file.js test.txt
+ls -la test.txt test.txt.gz   <span class="comment"># Compare sizes</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">Why is <code>pipeline()</code> preferred over <code>.pipe()</code> for connecting streams?</p>
+  <button class="quiz-option" data-index="0">pipeline() is faster because it uses OS-level zero-copy</button>
+  <button class="quiz-option" data-index="1">pipe() doesn't support Transform streams in the middle</button>
+  <button class="quiz-option" data-index="2">pipeline() destroys all streams on error and returns a Promise</button>
+  <button class="quiz-option" data-index="3">pipe() is deprecated and will be removed in Node.js 26</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">What is backpressure in Node.js streams?</p>
+  <button class="quiz-option" data-index="0">The CPU overhead caused by encoding data between transforms</button>
+  <button class="quiz-option" data-index="1">A mechanism that pauses a fast reader when the writer can't keep up</button>
+  <button class="quiz-option" data-index="2">Memory allocated in advance to buffer all incoming stream data</button>
+  <button class="quiz-option" data-index="3">The delay between creating a stream and receiving the first chunk</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">You need to serve a 1GB file over HTTP. What approach keeps memory constant?</p>
+  <button class="quiz-option" data-index="0">pipeline(createReadStream(file), createGzip(), response)</button>
+  <button class="quiz-option" data-index="1">const data = await readFile(file); response.end(data)</button>
+  <button class="quiz-option" data-index="2">const chunks = []; for await (c of stream) chunks.push(c)</button>
+  <button class="quiz-option" data-index="3">response.write(await readFile(file, 'base64'), 'base64')</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">Where do you import <code>createReadStream</code> from?</p>
+  <button class="quiz-option" data-index="0">node:fs/promises — like all modern fs operations</button>
+  <button class="quiz-option" data-index="1">node:stream — since it produces a stream object</button>
+  <button class="quiz-option" data-index="2">node:stream/promises — alongside pipeline</button>
+  <button class="quiz-option" data-index="3">node:fs — streams live on the callback-based module</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<h2>Primary Sources</h2>
+<ul>
+  <li><a href="https://nodejs.org/api/stream.html#streampipelinesource-transforms-destination-options" target="_blank">Node.js <code>stream.pipeline()</code> docs</a> — the authoritative reference</li>
+  <li><a href="https://nodejs.org/api/fs.html#fscreatereadstreampath-options" target="_blank">Node.js <code>createReadStream</code> docs</a> — options including highWaterMark</li>
+  <li><a href="https://wilsonxudev.hashnode.dev/nodejs-streams-a-practical-guide-to-processing-large-files-without-memory-issues" target="_blank">Node.js Streams: Processing Large Files (Wilson Xu, 2026)</a> — excellent practical guide with benchmarks</li>
+  <li><a href="https://nodejs.org/en/learn/modules/backpressuring-in-streams" target="_blank">Node.js Guide: Backpressuring in Streams</a></li>
+</ul>
+
+<div class="followup">
+  <strong>Questions?</strong> Ask me about writing custom Transform streams for your specific
+  use case, how to handle file uploads with streams in Express, streaming responses in
+  Next.js API routes, or chunked CSV/JSON processing. Next lesson: File handles &
+  byte-level access.
+</div>
+
+<div class="nav-links">
+  <a href="0003-reading-writing-files.html">← Lesson 3: Reading & Writing Files</a>
+  <a href="0005-file-handles.html">Lesson 5: File Handles & Byte-Level Access →</a>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

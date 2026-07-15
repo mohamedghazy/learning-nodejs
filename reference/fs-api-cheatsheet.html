@@ -107,6 +107,30 @@
   </tbody>
 </table>
 
+<h2>Stream Pipeline Pattern</h2>
+<pre><code><span class="keyword">import</span> { createReadStream, createWriteStream } <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+<span class="keyword">import</span> { pipeline } <span class="keyword">from</span> <span class="string">'node:stream/promises'</span>;
+<span class="keyword">import</span> { createGzip } <span class="keyword">from</span> <span class="string">'node:zlib'</span>;
+
+<span class="comment">// Read → Transform → Write (constant memory)</span>
+<span class="keyword">await</span> <span class="function">pipeline</span>(
+  <span class="function">createReadStream</span>(<span class="string">'input.log'</span>),
+  <span class="function">createGzip</span>(),
+  <span class="function">createWriteStream</span>(<span class="string">'output.log.gz'</span>)
+);</code></pre>
+
+<table>
+  <thead>
+    <tr><th>Scenario</th><th>Use</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Small files (&lt; 50MB)</td><td><code>readFile</code> / <code>writeFile</code></td></tr>
+    <tr><td>Large/unknown size files</td><td>Streams + <code>pipeline()</code></td></tr>
+    <tr><td>Line-by-line processing</td><td><code>readline.createInterface()</code> + <code>for await</code></td></tr>
+    <tr><td>Serving files over HTTP</td><td><code>pipeline(readStream, transform, response)</code></td></tr>
+  </tbody>
+</table>
+
 <h2>Error Handling Pattern</h2>
 <pre><code><span class="keyword">try</span> {
   <span class="keyword">const</span> data = <span class="keyword">await</span> <span class="function">readFile</span>(path, <span class="string">'utf8'</span>);

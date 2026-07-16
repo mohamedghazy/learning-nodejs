@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HTTP Lesson 4: Request Body Parsing — JSON, Form Data & Validation</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">HTTP — Lesson 04</p>
+<h1>Request Body Parsing</h1>
+<p class="subtitle">JSON, form data, size limits — safely reading what the client sends.</p>
+
+<!-- ============================================ -->
+<h2>Why Body Parsing Isn't Automatic</h2>
+
+<p>
+  Unlike <code>fetch().json()</code> in the browser, Node's <code>http</code> module gives you a raw
+  stream. You must:
+</p>
+<ol>
+  <li>Collect chunks from the Readable stream</li>
+  <li>Concatenate them into a complete string/buffer</li>
+  <li>Parse based on <code>Content-Type</code></li>
+  <li>Validate the result</li>
+</ol>
+
+<!-- ============================================ -->
+<h2>A Reusable Body Parser</h2>
+
+<pre><code><span class="keyword">async function</span> <span class="function">readBody</span>(req, { maxSize = <span class="number">1_048_576</span> } = {}) {
+  <span class="comment">// Default max: 1MB — prevent memory attacks</span>
+  <span class="keyword">const</span> chunks = [];
+  <span class="keyword">let</span> size = <span class="number">0</span>;
+
+  <span class="keyword">for await</span> (<span class="keyword">const</span> chunk <span class="keyword">of</span> req) {
+    size += chunk.length;
+    <span class="keyword">if</span> (size > maxSize) {
+      <span class="keyword">throw</span> Object.assign(
+        <span class="keyword">new</span> Error(<span class="string">'Request body too large'</span>),
+        { statusCode: <span class="number">413</span> }
+      );
+    }
+    chunks.push(chunk);
+  }
+  <span class="keyword">return</span> Buffer.concat(chunks).toString();
+}
+
+<span class="keyword">async function</span> <span class="function">readJSON</span>(req) {
+  <span class="keyword">const</span> contentType = req.headers[<span class="string">'content-type'</span>] || <span class="string">''</span>;
+  <span class="keyword">if</span> (!contentType.includes(<span class="string">'application/json'</span>)) {
+    <span class="keyword">throw</span> Object.assign(
+      <span class="keyword">new</span> Error(<span class="string">'Expected Content-Type: application/json'</span>),
+      { statusCode: <span class="number">415</span> }
+    );
+  }
+
+  <span class="keyword">const</span> raw = <span class="keyword">await</span> <span class="function">readBody</span>(req);
+  <span class="keyword">try</span> {
+    <span class="keyword">return</span> JSON.parse(raw);
+  } <span class="keyword">catch</span> {
+    <span class="keyword">throw</span> Object.assign(
+      <span class="keyword">new</span> Error(<span class="string">'Invalid JSON body'</span>),
+      { statusCode: <span class="number">400</span> }
+    );
+  }
+}</code></pre>
+
+<!-- ============================================ -->
+<h2>Using It in a Route</h2>
+
+<pre><code><span class="keyword">import</span> http <span class="keyword">from</span> <span class="string">'node:http'</span>;
+
+http.<span class="function">createServer</span>(<span class="keyword">async</span> (req, res) => {
+  <span class="keyword">const</span> <span class="function">json</span> = (data, status = <span class="number">200</span>) => {
+    res.writeHead(status, { <span class="string">'Content-Type'</span>: <span class="string">'application/json'</span> });
+    res.end(JSON.stringify(data));
+  };
+
+  <span class="keyword">try</span> {
+    <span class="keyword">if</span> (req.method === <span class="string">'POST'</span> && req.url === <span class="string">'/users'</span>) {
+      <span class="keyword">const</span> body = <span class="keyword">await</span> <span class="function">readJSON</span>(req);
+
+      <span class="comment">// Validate required fields</span>
+      <span class="keyword">if</span> (!body.name || !body.email) {
+        <span class="keyword">return</span> <span class="function">json</span>({ error: <span class="string">'name and email are required'</span> }, <span class="number">422</span>);
+      }
+
+      <span class="comment">// Create user (fake DB for now)</span>
+      <span class="keyword">const</span> user = { id: Date.now(), ...body };
+      <span class="function">json</span>(user, <span class="number">201</span>);
+    } <span class="keyword">else</span> {
+      <span class="function">json</span>({ error: <span class="string">'Not Found'</span> }, <span class="number">404</span>);
+    }
+  } <span class="keyword">catch</span> (err) {
+    <span class="function">json</span>({ error: err.message }, err.statusCode || <span class="number">500</span>);
+  }
+}).listen(<span class="number">3000</span>);</code></pre>
+
+<!-- ============================================ -->
+<h2>Form Data (<code>application/x-www-form-urlencoded</code>)</h2>
+
+<p>HTML forms send data in this format. Parse with <code>URLSearchParams</code>:</p>
+
+<pre><code><span class="keyword">async function</span> <span class="function">readFormData</span>(req) {
+  <span class="keyword">const</span> raw = <span class="keyword">await</span> <span class="function">readBody</span>(req);
+  <span class="keyword">return</span> Object.fromEntries(<span class="keyword">new</span> URLSearchParams(raw));
+}
+
+<span class="comment">// "name=Mohamed&email=m@test.com" → { name: 'Mohamed', email: 'm@test.com' }</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Security: Size Limits</h2>
+
+<div class="callout danger">
+  <strong>Always limit request body size.</strong> Without a limit, an attacker can send a 10GB body
+  and crash your server with OOM (out of memory). The <code>readBody</code> function above
+  enforces a 1MB default — adjust per endpoint (file uploads may need more).
+</div>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">A client sends a POST with <code>Content-Type: text/plain</code> to your JSON API endpoint. Which status code should you return?</p>
+  <button class="quiz-option" data-index="0">400 Bad Request — the body format is incorrect</button>
+  <button class="quiz-option" data-index="1">406 Not Acceptable — the server can't produce the requested format</button>
+  <button class="quiz-option" data-index="2">415 Unsupported Media Type — the Content-Type isn't supported</button>
+  <button class="quiz-option" data-index="3">422 Unprocessable Entity — the data failed validation rules</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">Why must you enforce a body size limit in your server?</p>
+  <button class="quiz-option" data-index="0">Node.js crashes if any Buffer exceeds 512MB in size</button>
+  <button class="quiz-option" data-index="1">An attacker can send a massive body to exhaust server memory</button>
+  <button class="quiz-option" data-index="2">HTTP/1.1 specification requires servers to reject bodies over 1MB</button>
+  <button class="quiz-option" data-index="3">JSON.parse is extremely slow for strings larger than 64KB</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="nav-links">
+  <a href="0003-routing-and-urls.html">← Lesson 3: Routing & URLs</a>
+  <a href="0005-json-api-patterns.html">Lesson 5: JSON API Response Patterns →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

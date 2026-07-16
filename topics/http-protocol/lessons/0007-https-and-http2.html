@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HTTP Lesson 7: HTTPS, TLS & HTTP/2 Basics</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">HTTP — Lesson 07</p>
+<h1>HTTPS, TLS & HTTP/2</h1>
+<p class="subtitle">How encryption works, why HTTP/2 is faster, and what you need to know for production deployment.</p>
+
+<!-- ============================================ -->
+<h2>HTTPS = HTTP + TLS</h2>
+
+<p>
+  HTTPS is not a different protocol — it's HTTP running inside a TLS (Transport Layer Security)
+  encrypted tunnel. The HTTP messages are identical; they're just encrypted in transit.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Aspect</th><th>HTTP</th><th>HTTPS</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Port (default)</td><td>80</td><td>443</td></tr>
+    <tr><td>Encrypted</td><td>No — anyone on the network can read</td><td>Yes — TLS encrypts everything</td></tr>
+    <tr><td>Certificates</td><td>None required</td><td>Server must have a TLS certificate</td></tr>
+    <tr><td>Performance</td><td>Slightly faster (no handshake)</td><td>TLS handshake adds ~1 round trip</td></tr>
+    <tr><td>Required for</td><td>Local dev only</td><td>Everything in production</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>How TLS Works (Simplified)</h2>
+
+<ol>
+  <li><strong>Client hello</strong> — browser sends supported cipher suites</li>
+  <li><strong>Server hello</strong> — server picks a cipher, sends its certificate (public key)</li>
+  <li><strong>Client verifies</strong> — checks certificate against trusted CAs (Certificate Authorities)</li>
+  <li><strong>Key exchange</strong> — client and server agree on a shared secret (symmetric key)</li>
+  <li><strong>Encrypted communication</strong> — all HTTP data encrypted with the symmetric key</li>
+</ol>
+
+<p>
+  As a backend dev, you don't implement TLS yourself. You either:
+</p>
+<ul>
+  <li>Use a reverse proxy (Nginx, Caddy) that handles TLS — <strong>most common in production</strong></li>
+  <li>Use Node's <code>node:https</code> module with certificate files — for direct HTTPS</li>
+  <li>Use a cloud provider (Vercel, AWS ALB, Cloudflare) that terminates TLS for you</li>
+</ul>
+
+<!-- ============================================ -->
+<h2>HTTPS Server in Node.js</h2>
+
+<pre><code><span class="keyword">import</span> https <span class="keyword">from</span> <span class="string">'node:https'</span>;
+<span class="keyword">import</span> { readFileSync } <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+
+<span class="keyword">const</span> options = {
+  key: <span class="function">readFileSync</span>(<span class="string">'certs/server.key'</span>),
+  cert: <span class="function">readFileSync</span>(<span class="string">'certs/server.cert'</span>),
+};
+
+https.<span class="function">createServer</span>(options, (req, res) => {
+  res.writeHead(<span class="number">200</span>, { <span class="string">'Content-Type'</span>: <span class="string">'text/plain'</span> });
+  res.end(<span class="string">'Secure hello!\n'</span>);
+}).listen(<span class="number">443</span>);</code></pre>
+
+<div class="callout">
+  <strong>In practice:</strong> Most production Node.js apps run plain HTTP behind a reverse proxy
+  (Nginx/Caddy/cloud LB) that handles TLS termination. Your Node process listens on
+  an internal port (3000), the proxy handles certificates and forwards requests.
+  This is simpler and lets you rotate certificates without restarting Node.
+</div>
+
+<!-- ============================================ -->
+<h2>HTTP/2 — What's Different</h2>
+
+<p>HTTP/2 solves HTTP/1.1's performance limitations:</p>
+
+<table>
+  <thead>
+    <tr><th>Feature</th><th>HTTP/1.1</th><th>HTTP/2</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Connections</td><td>One request per connection (or pipelining, rarely used)</td><td><strong>Multiplexing</strong> — many requests on one connection</td></tr>
+    <tr><td>Headers</td><td>Sent as plain text every request</td><td><strong>HPACK compression</strong> — headers are compressed and deduplicated</td></tr>
+    <tr><td>Format</td><td>Text-based</td><td>Binary framing — faster to parse</td></tr>
+    <tr><td>Server Push</td><td>Not possible</td><td>Server can send resources before client asks</td></tr>
+    <tr><td>Requires TLS?</td><td>No</td><td>Technically no, but all browsers require HTTPS for HTTP/2</td></tr>
+  </tbody>
+</table>
+
+<h3>Why it matters for full-stack:</h3>
+<ul>
+  <li><strong>Multiplexing</strong> eliminates the need for bundling tricks (sprite sheets, domain sharding)</li>
+  <li><strong>Header compression</strong> helps APIs with large auth tokens (JWTs can be 1KB+)</li>
+  <li><strong>You don't change your application code</strong> — HTTP/2 is handled at the transport layer</li>
+</ul>
+
+<!-- ============================================ -->
+<h2>HTTP/2 Server in Node.js</h2>
+
+<pre><code><span class="keyword">import</span> http2 <span class="keyword">from</span> <span class="string">'node:http2'</span>;
+<span class="keyword">import</span> { readFileSync } <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+
+<span class="keyword">const</span> server = http2.<span class="function">createSecureServer</span>({
+  key: <span class="function">readFileSync</span>(<span class="string">'certs/server.key'</span>),
+  cert: <span class="function">readFileSync</span>(<span class="string">'certs/server.cert'</span>),
+});
+
+server.on(<span class="string">'stream'</span>, (stream, headers) => {
+  <span class="comment">// HTTP/2 uses streams, not req/res objects</span>
+  stream.respond({ <span class="string">':status'</span>: <span class="number">200</span>, <span class="string">'content-type'</span>: <span class="string">'text/plain'</span> });
+  stream.end(<span class="string">'HTTP/2 response'</span>);
+});
+
+server.listen(<span class="number">443</span>);</code></pre>
+
+<div class="callout">
+  <strong>In practice:</strong> You rarely use <code>node:http2</code> directly. Frameworks (Express, Fastify)
+  and reverse proxies handle HTTP/2 automatically. Your application code stays the same.
+</div>
+
+<!-- ============================================ -->
+<h2>HTTP/3 (QUIC) — Brief Mention</h2>
+
+<p>
+  HTTP/3 replaces TCP with QUIC (built on UDP). Benefits: faster connection setup,
+  better on unreliable networks (mobile). Node.js has experimental support. For now,
+  it's handled at the infrastructure level (Cloudflare, CDNs). You don't need to code
+  for it — your HTTP handlers work the same.
+</p>
+
+<!-- ============================================ -->
+<h2>What You Actually Need for Production</h2>
+
+<ol>
+  <li><strong>Always use HTTPS</strong> in production — never serve over plain HTTP</li>
+  <li><strong>Get certificates from Let's Encrypt</strong> (free) or your cloud provider</li>
+  <li><strong>Use a reverse proxy</strong> (Nginx, Caddy) or cloud load balancer for TLS termination</li>
+  <li><strong>HTTP/2 is automatic</strong> if you use HTTPS + modern proxy (Caddy does HTTP/2 by default)</li>
+  <li><strong>Set HSTS header</strong> to force browsers to always use HTTPS:</li>
+</ol>
+
+<pre><code>res.setHeader(<span class="string">'Strict-Transport-Security'</span>, <span class="string">'max-age=31536000; includeSubDomains'</span>);</code></pre>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">How do most production Node.js apps handle HTTPS?</p>
+  <button class="quiz-option" data-index="0">Using node:https directly with certificate files loaded at startup</button>
+  <button class="quiz-option" data-index="1">A reverse proxy or cloud load balancer terminates TLS, Node runs plain HTTP internally</button>
+  <button class="quiz-option" data-index="2">The npm https package wraps the server and handles certificates automatically</button>
+  <button class="quiz-option" data-index="3">Node.js fetches certificates from Let's Encrypt at runtime using ACME protocol</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">What is the main performance benefit of HTTP/2 over HTTP/1.1?</p>
+  <button class="quiz-option" data-index="0">HTTP/2 uses UDP instead of TCP for faster data transfer speeds</button>
+  <button class="quiz-option" data-index="1">HTTP/2 removes the need for TLS encryption reducing latency overhead</button>
+  <button class="quiz-option" data-index="2">Multiplexing allows many requests and responses over a single connection simultaneously</button>
+  <button class="quiz-option" data-index="3">HTTP/2 compresses response bodies automatically without gzip configuration</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="nav-links">
+  <a href="0006-cors.html">← Lesson 6: CORS</a>
+  <span>🎉 HTTP Topic Complete</span>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

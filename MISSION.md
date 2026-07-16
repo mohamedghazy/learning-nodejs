@@ -4,14 +4,17 @@
 Senior frontend developer (5 years experience: JavaScript, React, Next.js, TypeScript) transitioning to full-stack development.
 
 ## Why
-To become a competent full-stack developer capable of building production-grade Node.js backends. Understanding the `fs` module deeply is essential for server-side file operations — config loading, file uploads, log management, build tooling, and data processing.
+To become a competent full-stack developer capable of building production-grade Node.js backends — understanding core modules, the HTTP protocol, frameworks (Express/Fastify), databases, authentication, and deployment.
 
-## Goal
-Master the Node.js `fs` module at a senior level — understanding the three API surfaces (sync, callback, promise), when to use each, streams for large files, file handles for byte-level access, error handling patterns, security (path traversal), and concurrency patterns.
+## Current Progress
+- ✅ **fs module** — 8 lessons complete. Senior-level understanding of file I/O, streams, security.
+- ✅ **HTTP protocol** — 7 lessons complete. Request/response, node:http server, routing, body parsing, JSON APIs, CORS, HTTPS/HTTP2.
+- ⬜ **Express/Fastify** — next topic
+- ⬜ **Databases** — planned
+- ⬜ **Authentication** — planned
 
 ## Success Criteria
-- Can choose the right `fs` API for any given scenario
-- Can safely handle file I/O in production server code
-- Understands memory limits and when to use streams
-- Can prevent path traversal attacks
-- Can write concurrent file operations with proper error handling
+- Can build production-grade Node.js APIs from scratch
+- Understands the full request/response cycle
+- Can make informed architectural decisions about file handling, routing, middleware, data persistence
+- Writes secure server-side code by default

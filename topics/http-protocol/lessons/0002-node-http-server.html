@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HTTP Lesson 2: Building an HTTP Server With Node.js</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">HTTP — Lesson 02</p>
+<h1>Building an HTTP Server With Node.js</h1>
+<p class="subtitle">Your first server in 10 lines — <code>createServer</code>, the request handler, and <code>listen()</code>.</p>
+
+<!-- ============================================ -->
+<h2>The Simplest Server</h2>
+
+<pre><code><span class="keyword">import</span> http <span class="keyword">from</span> <span class="string">'node:http'</span>;
+
+<span class="keyword">const</span> server = http.<span class="function">createServer</span>((req, res) => {
+  res.statusCode = <span class="number">200</span>;
+  res.setHeader(<span class="string">'Content-Type'</span>, <span class="string">'text/plain'</span>);
+  res.end(<span class="string">'Hello, World!\n'</span>);
+});
+
+server.listen(<span class="number">3000</span>, () => {
+  console.log(<span class="string">'Server running at http://localhost:3000/'</span>);
+});</code></pre>
+
+<p>Run it: <code>node server.js</code>. Visit <code>http://localhost:3000</code>. That's a server.</p>
+
+<h3>What's happening:</h3>
+<ol>
+  <li><code>http.createServer(handler)</code> — creates a server that calls your function for every request</li>
+  <li><code>req</code> — an <code>IncomingMessage</code> (Readable stream) containing the request</li>
+  <li><code>res</code> — a <code>ServerResponse</code> (Writable stream) you write the response to</li>
+  <li><code>server.listen(port)</code> — starts accepting connections</li>
+</ol>
+
+<!-- ============================================ -->
+<h2>The Request Object (<code>req</code>)</h2>
+
+<p>Everything the client sent is on <code>req</code>:</p>
+
+<pre><code><span class="keyword">const</span> server = http.<span class="function">createServer</span>((req, res) => {
+  console.log(req.method);   <span class="comment">// 'GET', 'POST', etc.</span>
+  console.log(req.url);      <span class="comment">// '/users?page=2'</span>
+  console.log(req.headers);  <span class="comment">// { host: 'localhost:3000', ... }</span>
+
+  <span class="comment">// Headers are ALWAYS lowercase in Node.js</span>
+  console.log(req.headers[<span class="string">'content-type'</span>]); <span class="comment">// 'application/json'</span>
+
+  res.end(<span class="string">'ok'</span>);
+});</code></pre>
+
+<div class="callout">
+  <strong>Important:</strong> <code>req.url</code> is just the path + query string — NOT the full URL.
+  <code>http://localhost:3000/users?page=2</code> → <code>req.url === '/users?page=2'</code>.
+</div>
+
+<!-- ============================================ -->
+<h2>The Response Object (<code>res</code>)</h2>
+
+<p>You control what goes back to the client:</p>
+
+<pre><code>http.<span class="function">createServer</span>((req, res) => {
+  <span class="comment">// 1. Set status code</span>
+  res.statusCode = <span class="number">200</span>;
+
+  <span class="comment">// 2. Set headers</span>
+  res.setHeader(<span class="string">'Content-Type'</span>, <span class="string">'application/json'</span>);
+  res.setHeader(<span class="string">'X-Request-Id'</span>, <span class="string">'abc-123'</span>);
+
+  <span class="comment">// 3. Write body and end</span>
+  <span class="keyword">const</span> data = { message: <span class="string">'hello'</span>, timestamp: Date.now() };
+  res.end(JSON.stringify(data));
+
+  <span class="comment">// OR use writeHead for status + headers in one call:</span>
+  <span class="comment">// res.writeHead(200, { 'Content-Type': 'application/json' });</span>
+  <span class="comment">// res.end(JSON.stringify(data));</span>
+});</code></pre>
+
+<h3>Rules:</h3>
+<ul>
+  <li>Set status and headers <strong>before</strong> writing body data</li>
+  <li><code>res.end()</code> must be called — otherwise the client hangs waiting forever</li>
+  <li><code>res.end(data)</code> = write final chunk + close. <code>res.write(data)</code> + <code>res.end()</code> = same thing</li>
+  <li>After <code>res.end()</code>, you cannot write more data</li>
+</ul>
+
+<!-- ============================================ -->
+<h2>Streaming Responses</h2>
+
+<p>
+  Since <code>res</code> is a Writable stream, you can stream large responses:
+</p>
+
+<pre><code><span class="keyword">import</span> http <span class="keyword">from</span> <span class="string">'node:http'</span>;
+<span class="keyword">import</span> { createReadStream } <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+<span class="keyword">import</span> { pipeline } <span class="keyword">from</span> <span class="string">'node:stream/promises'</span>;
+
+http.<span class="function">createServer</span>(<span class="keyword">async</span> (req, res) => {
+  res.writeHead(<span class="number">200</span>, { <span class="string">'Content-Type'</span>: <span class="string">'text/plain'</span> });
+  <span class="keyword">await</span> <span class="function">pipeline</span>(
+    <span class="function">createReadStream</span>(<span class="string">'big-log.txt'</span>),
+    res
+  );
+}).listen(<span class="number">3000</span>);</code></pre>
+
+<p>Your fs/streams knowledge from Lesson 4 applies directly here.</p>
+
+<!-- ============================================ -->
+<h2>Reading the Request Body</h2>
+
+<p>
+  <code>req</code> is a Readable stream. The body arrives in chunks — you collect them:
+</p>
+
+<pre><code>http.<span class="function">createServer</span>(<span class="keyword">async</span> (req, res) => {
+  <span class="keyword">if</span> (req.method === <span class="string">'POST'</span>) {
+    <span class="comment">// Collect body chunks</span>
+    <span class="keyword">const</span> chunks = [];
+    <span class="keyword">for await</span> (<span class="keyword">const</span> chunk <span class="keyword">of</span> req) {
+      chunks.push(chunk);
+    }
+    <span class="keyword">const</span> body = Buffer.concat(chunks).toString();
+    <span class="keyword">const</span> data = JSON.parse(body);
+
+    res.writeHead(<span class="number">201</span>, { <span class="string">'Content-Type'</span>: <span class="string">'application/json'</span> });
+    res.end(JSON.stringify({ received: data }));
+  } <span class="keyword">else</span> {
+    res.writeHead(<span class="number">200</span>, { <span class="string">'Content-Type'</span>: <span class="string">'text/plain'</span> });
+    res.end(<span class="string">'Send a POST request with JSON body'</span>);
+  }
+}).listen(<span class="number">3000</span>);</code></pre>
+
+<p>Test with: <code>curl -X POST -H "Content-Type: application/json" -d '{"name":"Mohamed"}' http://localhost:3000</code></p>
+
+<!-- ============================================ -->
+<h2>Error Handling</h2>
+
+<pre><code>http.<span class="function">createServer</span>(<span class="keyword">async</span> (req, res) => {
+  <span class="keyword">try</span> {
+    <span class="comment">// ... handle request ...</span>
+  } <span class="keyword">catch</span> (err) {
+    console.error(err);
+    <span class="keyword">if</span> (!res.headersSent) {
+      res.writeHead(<span class="number">500</span>, { <span class="string">'Content-Type'</span>: <span class="string">'application/json'</span> });
+      res.end(JSON.stringify({ error: <span class="string">'Internal Server Error'</span> }));
+    }
+  }
+}).listen(<span class="number">3000</span>);</code></pre>
+
+<div class="callout warning">
+  <strong>Always check <code>res.headersSent</code></strong> before setting status/headers in error handlers.
+  If you already started writing the response, you can't change the status code.
+</div>
+
+<!-- ============================================ -->
+<h2>Hands-On Exercise</h2>
+
+<p>Create <code>server.js</code> that responds with the current time as JSON:</p>
+<pre><code><span class="comment">// GET http://localhost:3000 → {"time":"2026-07-16T15:30:00.000Z"}</span></code></pre>
+
+<p>Then add POST support that echoes back whatever JSON body you send.</p>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">What happens if you never call <code>res.end()</code> in your request handler?</p>
+  <button class="quiz-option" data-index="0">Node.js automatically ends the response after 30 seconds</button>
+  <button class="quiz-option" data-index="1">The response is sent with an empty body automatically</button>
+  <button class="quiz-option" data-index="2">The client hangs waiting forever (request times out eventually)</button>
+  <button class="quiz-option" data-index="3">Node.js throws an error and crashes the server process</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">How do you read the body of a POST request in Node's <code>http</code> module?</p>
+  <button class="quiz-option" data-index="0">Access req.body directly — it's parsed automatically by Node.js</button>
+  <button class="quiz-option" data-index="1">Collect chunks from req (a Readable stream) and concatenate them</button>
+  <button class="quiz-option" data-index="2">Call req.json() which returns a promise like the Fetch API does</button>
+  <button class="quiz-option" data-index="3">Read req.params.body which contains the full request payload</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="nav-links">
+  <a href="0001-http-request-response.html">← Lesson 1: Request-Response Cycle</a>
+  <a href="0003-routing-and-urls.html">Lesson 3: Routing & URL Parsing →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

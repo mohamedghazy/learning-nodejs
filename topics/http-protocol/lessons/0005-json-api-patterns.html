@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HTTP Lesson 5: JSON API Response Patterns & Error Handling</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">HTTP — Lesson 05</p>
+<h1>JSON API Response Patterns</h1>
+<p class="subtitle">Consistent response shapes, proper error responses, and the patterns that make APIs a pleasure to consume.</p>
+
+<!-- ============================================ -->
+<h2>Consistent Response Shape</h2>
+
+<p>
+  As a frontend dev, you know the pain of inconsistent APIs. As a backend dev, design your
+  responses so clients can predict the structure:
+</p>
+
+<pre><code><span class="comment">// Success: always has "data"</span>
+{ <span class="string">"data"</span>: { <span class="string">"id"</span>: <span class="number">1</span>, <span class="string">"name"</span>: <span class="string">"Mohamed"</span> } }
+{ <span class="string">"data"</span>: [{ <span class="string">"id"</span>: <span class="number">1</span> }, { <span class="string">"id"</span>: <span class="number">2</span> }], <span class="string">"meta"</span>: { <span class="string">"total"</span>: <span class="number">42</span>, <span class="string">"page"</span>: <span class="number">1</span> } }
+
+<span class="comment">// Error: always has "error"</span>
+{ <span class="string">"error"</span>: { <span class="string">"message"</span>: <span class="string">"User not found"</span>, <span class="string">"code"</span>: <span class="string">"NOT_FOUND"</span> } }
+{ <span class="string">"error"</span>: { <span class="string">"message"</span>: <span class="string">"Validation failed"</span>, <span class="string">"code"</span>: <span class="string">"VALIDATION"</span>,
+  <span class="string">"details"</span>: [{ <span class="string">"field"</span>: <span class="string">"email"</span>, <span class="string">"issue"</span>: <span class="string">"Invalid format"</span> }] } }</code></pre>
+
+<!-- ============================================ -->
+<h2>Response Helpers</h2>
+
+<pre><code><span class="keyword">function</span> <span class="function">sendJSON</span>(res, data, status = <span class="number">200</span>) {
+  <span class="keyword">const</span> body = JSON.stringify(data);
+  res.writeHead(status, {
+    <span class="string">'Content-Type'</span>: <span class="string">'application/json'</span>,
+    <span class="string">'Content-Length'</span>: Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
+<span class="keyword">function</span> <span class="function">sendSuccess</span>(res, data, status = <span class="number">200</span>) {
+  <span class="function">sendJSON</span>(res, { data }, status);
+}
+
+<span class="keyword">function</span> <span class="function">sendError</span>(res, message, code, status, details) {
+  <span class="keyword">const</span> error = { message, code };
+  <span class="keyword">if</span> (details) error.details = details;
+  <span class="function">sendJSON</span>(res, { error }, status);
+}
+
+<span class="comment">// Usage:</span>
+<span class="function">sendSuccess</span>(res, { id: <span class="number">1</span>, name: <span class="string">'Mohamed'</span> }, <span class="number">201</span>);
+<span class="function">sendError</span>(res, <span class="string">'User not found'</span>, <span class="string">'NOT_FOUND'</span>, <span class="number">404</span>);</code></pre>
+
+<!-- ============================================ -->
+<h2>Centralized Error Handling</h2>
+
+<pre><code><span class="keyword">class</span> <span class="function">AppError</span> <span class="keyword">extends</span> Error {
+  <span class="function">constructor</span>(message, statusCode, code) {
+    <span class="keyword">super</span>(message);
+    <span class="keyword">this</span>.statusCode = statusCode;
+    <span class="keyword">this</span>.code = code;
+  }
+}
+
+http.<span class="function">createServer</span>(<span class="keyword">async</span> (req, res) => {
+  <span class="keyword">try</span> {
+    <span class="comment">// ... routing and handlers ...</span>
+
+    <span class="comment">// In any handler, throw AppError:</span>
+    <span class="keyword">throw new</span> <span class="function">AppError</span>(<span class="string">'User not found'</span>, <span class="number">404</span>, <span class="string">'NOT_FOUND'</span>);
+
+  } <span class="keyword">catch</span> (err) {
+    <span class="keyword">if</span> (err <span class="keyword">instanceof</span> AppError) {
+      <span class="function">sendError</span>(res, err.message, err.code, err.statusCode);
+    } <span class="keyword">else</span> {
+      <span class="comment">// Unexpected error — don't leak internals to client</span>
+      console.error(err);
+      <span class="function">sendError</span>(res, <span class="string">'Internal Server Error'</span>, <span class="string">'INTERNAL'</span>, <span class="number">500</span>);
+    }
+  }
+}).listen(<span class="number">3000</span>);</code></pre>
+
+<div class="callout danger">
+  <strong>Never send stack traces or internal error details to the client.</strong> They reveal
+  your file structure, dependencies, and potential attack surfaces. Log them server-side,
+  send a generic message to the client.
+</div>
+
+<!-- ============================================ -->
+<h2>Pagination Pattern</h2>
+
+<pre><code><span class="comment">// GET /users?page=2&limit=20</span>
+<span class="function">sendJSON</span>(res, {
+  data: users,
+  meta: {
+    total: <span class="number">150</span>,
+    page: <span class="number">2</span>,
+    limit: <span class="number">20</span>,
+    totalPages: Math.ceil(<span class="number">150</span> / <span class="number">20</span>),
+  }
+});</code></pre>
+
+<!-- ============================================ -->
+<h2>Proper Content-Length</h2>
+
+<p>Remember from your fs lessons — use <code>Buffer.byteLength</code>, not <code>string.length</code>:</p>
+
+<pre><code><span class="keyword">const</span> body = JSON.stringify({ message: <span class="string">'مرحبا'</span> }); <span class="comment">// Arabic</span>
+res.setHeader(<span class="string">'Content-Length'</span>, Buffer.byteLength(body)); <span class="comment">// ✓ bytes</span>
+<span class="comment">// NOT body.length — that counts characters, not bytes</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">Your server catches an unexpected TypeError from a bug in your code. What should the response look like?</p>
+  <button class="quiz-option" data-index="0">Return 400 with the full error stack trace for debugging</button>
+  <button class="quiz-option" data-index="1">Return 200 with { "error": null } to avoid alarming the client</button>
+  <button class="quiz-option" data-index="2">Return 404 to hide the fact that the server has an internal issue</button>
+  <button class="quiz-option" data-index="3">Return 500 with a generic message, log the real error server-side</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="nav-links">
+  <a href="0004-request-body-parsing.html">← Lesson 4: Body Parsing</a>
+  <a href="0006-cors.html">Lesson 6: CORS →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

@@ -73,15 +73,29 @@
   </tbody>
 </table>
 
-<h2>Path Safety Pattern</h2>
+<h2>Path Safety Pattern (Path Traversal Prevention)</h2>
 <pre><code><span class="keyword">import</span> { resolve, sep } <span class="keyword">from</span> <span class="string">'node:path'</span>;
 
-<span class="keyword">const</span> baseDir = <span class="function">resolve</span>(<span class="string">'uploads'</span>);
-<span class="keyword">const</span> target = <span class="function">resolve</span>(baseDir, userInput);
+<span class="keyword">const</span> BASE_DIR = <span class="function">resolve</span>(<span class="string">'uploads'</span>);
 
-<span class="keyword">if</span> (!target.startsWith(baseDir + sep)) {
-  <span class="keyword">throw new</span> Error(<span class="string">'Path traversal blocked'</span>);
+<span class="keyword">function</span> <span class="function">safePath</span>(userInput) {
+  <span class="keyword">const</span> target = <span class="function">resolve</span>(BASE_DIR, userInput);
+  <span class="keyword">if</span> (!target.startsWith(BASE_DIR + sep) && target !== BASE_DIR) {
+    <span class="keyword">throw new</span> Error(<span class="string">'Path traversal blocked'</span>);
+  }
+  <span class="keyword">return</span> target;
 }</code></pre>
+<p><strong>Why <code>+ sep</code>?</strong> Without it, <code>/app/uploads-private</code> passes <code>startsWith('/app/uploads')</code>.</p>
+
+<h2>Security Checklist for File Endpoints</h2>
+<ol>
+  <li><code>resolve()</code> + <code>startsWith(base + sep)</code> — path traversal</li>
+  <li><code>realpath()</code> + re-check — symlink escape</li>
+  <li>Magic numbers — file type validation (don't trust extensions)</li>
+  <li>Size limits — prevent resource exhaustion</li>
+  <li>Sanitize filenames — strip special characters</li>
+  <li>Don't leak paths in error responses</li>
+</ol>
 
 <h2>Buffer vs String Decision</h2>
 <table>

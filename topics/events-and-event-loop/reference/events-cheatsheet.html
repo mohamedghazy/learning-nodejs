@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reference: Events & Event Loop Cheat Sheet</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+</head>
+<body>
+
+<h1>Events & Event Loop — Quick Reference</h1>
+
+<h2>EventEmitter API</h2>
+<pre><code><span class="keyword">import</span> { EventEmitter } <span class="keyword">from</span> <span class="string">'node:events'</span>;
+<span class="keyword">const</span> emitter = <span class="keyword">new</span> <span class="function">EventEmitter</span>();
+
+emitter.<span class="function">on</span>(event, listener)       <span class="comment">// subscribe (persistent)</span>
+emitter.<span class="function">once</span>(event, listener)     <span class="comment">// subscribe (one-time)</span>
+emitter.<span class="function">emit</span>(event, ...args)      <span class="comment">// publish (synchronous!)</span>
+emitter.<span class="function">off</span>(event, listener)      <span class="comment">// unsubscribe</span>
+emitter.<span class="function">removeAllListeners</span>(event) <span class="comment">// remove all</span>
+emitter.<span class="function">listenerCount</span>(event)      <span class="comment">// count listeners</span>
+emitter.<span class="function">setMaxListeners</span>(n)        <span class="comment">// default: 10</span></code></pre>
+
+<h2>Key Facts</h2>
+<ul>
+  <li>Listeners are called <strong>synchronously</strong> in registration order</li>
+  <li><code>'error'</code> event with no listener → process crash</li>
+  <li>Async listeners: errors don't propagate to emit() — wrap in try/catch</li>
+  <li>MaxListeners warning (10) = likely memory leak (listeners in a loop)</li>
+</ul>
+
+<h2>Event Loop Execution Order</h2>
+<pre><code>1. Synchronous code (call stack)
+2. process.nextTick() callbacks (microtask)
+3. Promise .then/.catch callbacks (microtask)
+4. Timer callbacks (setTimeout, setInterval)
+5. I/O callbacks (fs, network — poll phase)
+6. setImmediate callbacks (check phase)
+7. Close callbacks (socket.on('close'))</code></pre>
+
+<h2>Event Loop Phases</h2>
+<table>
+  <tr><td>Timers</td><td>setTimeout, setInterval</td></tr>
+  <tr><td>Pending</td><td>I/O error callbacks</td></tr>
+  <tr><td>Poll</td><td>I/O callbacks (fs, network) — where server waits</td></tr>
+  <tr><td>Check</td><td>setImmediate</td></tr>
+  <tr><td>Close</td><td>socket.on('close')</td></tr>
+</table>
+
+<h2>Defer Work (Don't Block)</h2>
+<table>
+  <tr><td><code>setImmediate(fn)</code></td><td>Run after I/O (check phase) — best for yielding</td></tr>
+  <tr><td><code>process.nextTick(fn)</code></td><td>Run before any I/O (microtask) — can starve loop!</td></tr>
+  <tr><td><code>setTimeout(fn, 0)</code></td><td>Run in next timers phase (~1ms minimum delay)</td></tr>
+  <tr><td>Worker Threads</td><td>Offload CPU work > 50ms to separate OS thread</td></tr>
+</table>
+
+<h2>libuv Thread Pool</h2>
+<ul>
+  <li>Default: 4 threads (for fs, crypto, DNS)</li>
+  <li>Network I/O uses OS kernel async (not thread pool)</li>
+  <li>Increase: <code>process.env.UV_THREADPOOL_SIZE = '16'</code></li>
+</ul>
+
+<h2>Common Events Across APIs</h2>
+<table>
+  <thead><tr><th>API</th><th>Events</th></tr></thead>
+  <tbody>
+    <tr><td>Readable Stream</td><td><code>data</code>, <code>end</code>, <code>error</code>, <code>close</code>, <code>readable</code></td></tr>
+    <tr><td>Writable Stream</td><td><code>drain</code>, <code>finish</code>, <code>error</code>, <code>close</code>, <code>pipe</code></td></tr>
+    <tr><td>HTTP Server</td><td><code>request</code>, <code>connection</code>, <code>listening</code>, <code>close</code>, <code>error</code></td></tr>
+    <tr><td>net.Socket</td><td><code>data</code>, <code>end</code>, <code>connect</code>, <code>close</code>, <code>error</code>, <code>timeout</code></td></tr>
+    <tr><td>Child Process</td><td><code>exit</code>, <code>error</code>, <code>message</code>, <code>close</code>, <code>disconnect</code></td></tr>
+  </tbody>
+</table>
+
+</body>
+</html>

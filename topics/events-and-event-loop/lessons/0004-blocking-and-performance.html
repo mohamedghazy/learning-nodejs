@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Events Lesson 4: Blocking the Event Loop & Performance</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Events — Lesson 04</p>
+<h1>Blocking & Performance</h1>
+<p class="subtitle">What blocks the event loop, how to detect it, and how to fix it without Worker Threads.</p>
+
+<!-- ============================================ -->
+<h2>What "Blocking" Means in Practice</h2>
+
+<p>
+  The event loop can only process <strong>one</strong> callback at a time. If that callback takes
+  100ms of CPU time (not I/O wait — actual computation), then for 100ms:
+</p>
+<ul>
+  <li>No incoming HTTP requests are handled</li>
+  <li>No timer callbacks fire</li>
+  <li>No I/O callbacks run</li>
+  <li>Your entire server is frozen</li>
+</ul>
+
+<h3>Common Blockers</h3>
+<table>
+  <thead>
+    <tr><th>Operation</th><th>Why it blocks</th><th>Solution</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>JSON.parse(hugeString)</code></td><td>CPU-bound parsing</td><td>Stream-parse, or offload to worker</td></tr>
+    <tr><td><code>readFileSync()</code></td><td>Blocks until disk read completes</td><td>Use async <code>readFile</code></td></tr>
+    <tr><td>Complex regex on large input</td><td>Backtracking regex = CPU spike</td><td>Limit input size, use safer patterns</td></tr>
+    <tr><td>Crypto operations (bcrypt, scrypt)</td><td>Intentionally CPU-heavy</td><td>Use async versions (they use thread pool)</td></tr>
+    <tr><td><code>for</code> loop over millions of items</td><td>Pure CPU time</td><td>Chunk with <code>setImmediate</code> or use worker</td></tr>
+    <tr><td>Image/video processing</td><td>Heavy computation</td><td>Worker threads or external service</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>Detecting Event Loop Lag</h2>
+
+<pre><code><span class="comment">// Simple event loop lag detector</span>
+<span class="keyword">let</span> lastCheck = Date.now();
+
+setInterval(() => {
+  <span class="keyword">const</span> now = Date.now();
+  <span class="keyword">const</span> lag = now - lastCheck - <span class="number">1000</span>; <span class="comment">// Expected: 0ms lag</span>
+  <span class="keyword">if</span> (lag > <span class="number">100</span>) {
+    console.warn(<span class="string">`⚠️ Event loop lag: ${lag}ms`</span>);
+  }
+  lastCheck = now;
+}, <span class="number">1000</span>);</code></pre>
+
+<p>
+  If the interval fires after 1200ms instead of 1000ms, there's 200ms of lag — something
+  blocked the loop for 200ms.
+</p>
+
+<!-- ============================================ -->
+<h2>Fix: Chunking with <code>setImmediate</code></h2>
+
+<p>
+  Break a long-running loop into chunks, yielding control back to the event loop
+  between each chunk:
+</p>
+
+<pre><code><span class="comment">// ❌ Blocks: processes 1M items without yielding</span>
+<span class="keyword">function</span> <span class="function">processAllSync</span>(items) {
+  <span class="keyword">for</span> (<span class="keyword">const</span> item <span class="keyword">of</span> items) {
+    <span class="function">heavyComputation</span>(item);
+  }
+}
+
+<span class="comment">// ✅ Non-blocking: processes in chunks, yields between them</span>
+<span class="keyword">function</span> <span class="function">processInChunks</span>(items, chunkSize = <span class="number">1000</span>) {
+  <span class="keyword">return new</span> Promise((resolve) => {
+    <span class="keyword">let</span> i = <span class="number">0</span>;
+
+    <span class="keyword">function</span> <span class="function">processChunk</span>() {
+      <span class="keyword">const</span> end = Math.min(i + chunkSize, items.length);
+      <span class="keyword">for</span> (; i < end; i++) {
+        <span class="function">heavyComputation</span>(items[i]);
+      }
+      <span class="keyword">if</span> (i < items.length) {
+        <span class="function">setImmediate</span>(processChunk); <span class="comment">// yield, then continue</span>
+      } <span class="keyword">else</span> {
+        <span class="function">resolve</span>();
+      }
+    }
+
+    <span class="function">processChunk</span>();
+  });
+}</code></pre>
+
+<div class="callout">
+  <strong>Why <code>setImmediate</code> and not <code>setTimeout(fn, 0)</code>?</strong>
+  <code>setImmediate</code> runs in the check phase — right after I/O. <code>setTimeout(fn, 0)</code>
+  has a minimum ~1ms delay and runs in the timers phase. <code>setImmediate</code> is more
+  predictable for yielding.
+</div>
+
+<!-- ============================================ -->
+<h2>Fix: Worker Threads for Heavy CPU Work</h2>
+
+<pre><code><span class="comment">// main.js — offload CPU work to a worker</span>
+<span class="keyword">import</span> { Worker } <span class="keyword">from</span> <span class="string">'node:worker_threads'</span>;
+
+<span class="keyword">function</span> <span class="function">runInWorker</span>(data) {
+  <span class="keyword">return new</span> Promise((resolve, reject) => {
+    <span class="keyword">const</span> worker = <span class="keyword">new</span> <span class="function">Worker</span>(<span class="string">'./heavy-task.js'</span>, {
+      workerData: data,
+    });
+    worker.<span class="function">on</span>(<span class="string">'message'</span>, resolve);
+    worker.<span class="function">on</span>(<span class="string">'error'</span>, reject);
+  });
+}
+
+<span class="comment">// heavy-task.js — runs in a separate thread</span>
+<span class="keyword">import</span> { parentPort, workerData } <span class="keyword">from</span> <span class="string">'node:worker_threads'</span>;
+
+<span class="keyword">const</span> result = <span class="function">expensiveComputation</span>(workerData);
+parentPort.<span class="function">postMessage</span>(result);</code></pre>
+
+<p>
+  Worker threads run on a separate OS thread — they don't block the main event loop.
+  Use them for: image processing, PDF generation, heavy crypto, large data transforms.
+</p>
+
+<!-- ============================================ -->
+<h2>The libuv Thread Pool</h2>
+
+<p>
+  Some Node.js built-in operations already use a thread pool (managed by libuv):
+</p>
+<ul>
+  <li><code>fs</code> operations (readFile, writeFile, stat) — thread pool</li>
+  <li><code>crypto.pbkdf2</code>, <code>crypto.randomBytes</code> — thread pool</li>
+  <li><code>dns.lookup</code> — thread pool</li>
+  <li>Network I/O (TCP, HTTP) — OS kernel async (NOT thread pool)</li>
+</ul>
+
+<p>
+  Default thread pool size: <strong>4 threads</strong>. If you have 10 concurrent <code>readFile</code> calls,
+  only 4 run in parallel — the rest queue. Increase with:
+</p>
+
+<pre><code><span class="comment">// Set before any I/O — usually at process start</span>
+process.env.UV_THREADPOOL_SIZE = <span class="string">'16'</span>; <span class="comment">// max: 1024</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Summary: Event Loop Rules</h2>
+
+<ol>
+  <li><strong>Never do CPU-heavy work synchronously</strong> in a server request handler</li>
+  <li><strong>Never use <code>*Sync</code> methods</strong> in concurrent code (HTTP servers, workers)</li>
+  <li><strong>Chunk long loops</strong> with <code>setImmediate</code> to yield between iterations</li>
+  <li><strong>Offload CPU work</strong> to Worker Threads for operations > 50ms</li>
+  <li><strong>Monitor event loop lag</strong> in production to catch regressions</li>
+</ol>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">Your server takes 500ms to respond during high load. You find a <code>JSON.parse</code> call on a 50MB string in the request handler. What's the fix?</p>
+  <button class="quiz-option" data-index="0">Use JSON.parseAsync() which returns a promise and doesn't block</button>
+  <button class="quiz-option" data-index="1">Wrap JSON.parse in setTimeout(fn, 0) to defer it to the next tick</button>
+  <button class="quiz-option" data-index="2">Increase the UV_THREADPOOL_SIZE to allow more concurrent parsing</button>
+  <button class="quiz-option" data-index="3">Use a streaming JSON parser or offload parsing to a Worker Thread</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">The default libuv thread pool size is:</p>
+  <button class="quiz-option" data-index="0">1 thread — Node.js is always single-threaded</button>
+  <button class="quiz-option" data-index="1">4 threads — shared by fs, crypto, and DNS operations</button>
+  <button class="quiz-option" data-index="2">16 threads — matching typical CPU core counts</button>
+  <button class="quiz-option" data-index="3">Unlimited — a new thread is spawned for each async operation</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="nav-links">
+  <a href="0003-practical-patterns.html">← Lesson 3: Practical Patterns</a>
+  <a href="0005-streams-and-events-connection.html">Lesson 5: How Streams Use Events →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

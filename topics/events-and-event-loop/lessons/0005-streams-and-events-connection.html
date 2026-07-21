@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Events Lesson 5: How Streams, HTTP & Everything Use EventEmitter</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Events — Lesson 05</p>
+<h1>How Everything Connects</h1>
+<p class="subtitle">Streams, HTTP servers, and the event-driven architecture that ties your Node.js knowledge together.</p>
+
+<!-- ============================================ -->
+<h2>The Inheritance Chain</h2>
+
+<p>Almost every important Node.js class extends EventEmitter:</p>
+
+<pre><code><span class="comment">// Streams</span>
+Readable  → Stream → EventEmitter
+Writable  → Stream → EventEmitter
+Transform → Duplex → Stream → EventEmitter
+
+<span class="comment">// HTTP</span>
+http.Server         → net.Server → EventEmitter
+http.IncomingMessage → Readable  → Stream → EventEmitter
+http.ServerResponse  → Writable  → Stream → EventEmitter
+
+<span class="comment">// Other</span>
+net.Socket    → Duplex → Stream → EventEmitter
+child_process → EventEmitter
+fs.FSWatcher  → EventEmitter</code></pre>
+
+<p>
+  <strong>This is why your knowledge compounds.</strong> Learn EventEmitter once, understand
+  how every Node.js API communicates.
+</p>
+
+<!-- ============================================ -->
+<h2>Streams Are EventEmitters</h2>
+
+<p>When you wrote <code>pipeline(readable, writable)</code> in your fs lessons, here's what happened under the hood:</p>
+
+<pre><code><span class="comment">// What pipeline() does internally (simplified):</span>
+readable.<span class="function">on</span>(<span class="string">'data'</span>, (chunk) => {
+  <span class="keyword">const</span> canContinue = writable.<span class="function">write</span>(chunk);
+  <span class="keyword">if</span> (!canContinue) readable.<span class="function">pause</span>(); <span class="comment">// backpressure!</span>
+});
+
+writable.<span class="function">on</span>(<span class="string">'drain'</span>, () => {
+  readable.<span class="function">resume</span>(); <span class="comment">// buffer cleared, continue reading</span>
+});
+
+readable.<span class="function">on</span>(<span class="string">'end'</span>, () => {
+  writable.<span class="function">end</span>(); <span class="comment">// no more data</span>
+});
+
+readable.<span class="function">on</span>(<span class="string">'error'</span>, cleanup);
+writable.<span class="function">on</span>(<span class="string">'error'</span>, cleanup);</code></pre>
+
+<p>
+  Every stream event you've used (<code>'data'</code>, <code>'end'</code>, <code>'error'</code>, <code>'drain'</code>,
+  <code>'close'</code>) is just EventEmitter's <code>.on()</code> and <code>.emit()</code>.
+</p>
+
+<!-- ============================================ -->
+<h2>HTTP Server Is an EventEmitter</h2>
+
+<pre><code><span class="keyword">import</span> http <span class="keyword">from</span> <span class="string">'node:http'</span>;
+
+<span class="keyword">const</span> server = http.<span class="function">createServer</span>();
+
+<span class="comment">// These are all EventEmitter events:</span>
+server.<span class="function">on</span>(<span class="string">'request'</span>, (req, res) => { <span class="comment">/* handle HTTP request */</span> });
+server.<span class="function">on</span>(<span class="string">'connection'</span>, (socket) => { <span class="comment">/* new TCP connection */</span> });
+server.<span class="function">on</span>(<span class="string">'listening'</span>, () => { <span class="comment">/* server started */</span> });
+server.<span class="function">on</span>(<span class="string">'close'</span>, () => { <span class="comment">/* server stopped */</span> });
+server.<span class="function">on</span>(<span class="string">'error'</span>, (err) => { <span class="comment">/* port in use, etc. */</span> });
+
+<span class="comment">// createServer(handler) is just shorthand for:</span>
+<span class="comment">// server.on('request', handler)</span>
+
+server.listen(<span class="number">3000</span>);</code></pre>
+
+<!-- ============================================ -->
+<h2>Building a Real-Time Notification System</h2>
+
+<p>Combining EventEmitter with HTTP — Server-Sent Events (SSE):</p>
+
+<pre><code><span class="keyword">import</span> http <span class="keyword">from</span> <span class="string">'node:http'</span>;
+<span class="keyword">import</span> { EventEmitter } <span class="keyword">from</span> <span class="string">'node:events'</span>;
+
+<span class="keyword">const</span> notifications = <span class="keyword">new</span> <span class="function">EventEmitter</span>();
+
+http.<span class="function">createServer</span>((req, res) => {
+  <span class="keyword">if</span> (req.url === <span class="string">'/events'</span>) {
+    <span class="comment">// SSE: keep connection open, stream events to client</span>
+    res.writeHead(<span class="number">200</span>, {
+      <span class="string">'Content-Type'</span>: <span class="string">'text/event-stream'</span>,
+      <span class="string">'Cache-Control'</span>: <span class="string">'no-cache'</span>,
+      <span class="string">'Connection'</span>: <span class="string">'keep-alive'</span>,
+    });
+
+    <span class="keyword">const</span> <span class="function">onNotification</span> = (data) => {
+      res.write(<span class="string">`data: ${JSON.stringify(data)}\n\n`</span>);
+    };
+
+    notifications.<span class="function">on</span>(<span class="string">'new'</span>, onNotification);
+    req.<span class="function">on</span>(<span class="string">'close'</span>, () => {
+      notifications.<span class="function">off</span>(<span class="string">'new'</span>, onNotification); <span class="comment">// cleanup!</span>
+    });
+  }
+  <span class="keyword">else if</span> (req.method === <span class="string">'POST'</span> && req.url === <span class="string">'/notify'</span>) {
+    <span class="comment">// Emit notification to all connected clients</span>
+    notifications.<span class="function">emit</span>(<span class="string">'new'</span>, { message: <span class="string">'New order!'</span>, time: Date.now() });
+    res.writeHead(<span class="number">200</span>);
+    res.end(<span class="string">'sent'</span>);
+  }
+}).listen(<span class="number">3000</span>);</code></pre>
+
+<p>
+  This pattern connects: EventEmitter for pub/sub, streams (res is a Writable),
+  HTTP server (is an EventEmitter), and cleanup on <code>'close'</code> event to prevent leaks.
+</p>
+
+<!-- ============================================ -->
+<h2>The Full Mental Model</h2>
+
+<pre><code><span class="comment">// Everything in Node.js is event-driven:</span>
+<span class="comment">//</span>
+<span class="comment">//  ┌─────────────────────────────────────────────────┐</span>
+<span class="comment">//  │              Your JavaScript Code                │</span>
+<span class="comment">//  │  (registers callbacks, emits events, awaits)     │</span>
+<span class="comment">//  └────────────────────┬────────────────────────────┘</span>
+<span class="comment">//                       │</span>
+<span class="comment">//           ┌───────────┴───────────┐</span>
+<span class="comment">//           │     Event Loop         │</span>
+<span class="comment">//           │  (schedules callbacks) │</span>
+<span class="comment">//           └───────────┬───────────┘</span>
+<span class="comment">//                       │</span>
+<span class="comment">//           ┌───────────┴───────────┐</span>
+<span class="comment">//           │    libuv + OS kernel   │</span>
+<span class="comment">//           │  (async I/O, threads)  │</span>
+<span class="comment">//           └───────────────────────┘</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">Why is <code>http.createServer(handler)</code> just shorthand?</p>
+  <button class="quiz-option" data-index="0">It creates a server and immediately starts listening on a random port</button>
+  <button class="quiz-option" data-index="1">It's equivalent to creating a server then calling server.on('request', handler)</button>
+  <button class="quiz-option" data-index="2">It wraps the handler in an async function for better error handling</button>
+  <button class="quiz-option" data-index="3">It adds default middleware for parsing JSON and form data</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">When a readable stream emits <code>'data'</code> events faster than the writable can handle, what mechanism prevents memory from growing unbounded?</p>
+  <button class="quiz-option" data-index="0">The event loop automatically drops data events when memory is high</button>
+  <button class="quiz-option" data-index="1">EventEmitter throttles emit() calls based on listener execution time</button>
+  <button class="quiz-option" data-index="2">The OS kernel buffers the data externally until the writable catches up</button>
+  <button class="quiz-option" data-index="3">Backpressure: writable.write() returns false, readable pauses until 'drain'</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="nav-links">
+  <a href="0004-blocking-and-performance.html">← Lesson 4: Blocking & Performance</a>
+  <span>🎉 Events & Event Loop Topic Complete</span>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

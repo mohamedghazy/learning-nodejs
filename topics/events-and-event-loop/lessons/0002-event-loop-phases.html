@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Events Lesson 2: The Event Loop — 6 Phases Explained</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Events — Lesson 02</p>
+<h1>The Event Loop — 6 Phases</h1>
+<p class="subtitle">How Node.js handles thousands of concurrent operations on a single thread. The loop that makes non-blocking I/O work.</p>
+
+<!-- ============================================ -->
+<h2>The Big Picture</h2>
+
+<p>
+  Node.js runs your JavaScript on a <strong>single thread</strong>. But it handles thousands of
+  concurrent connections. How? The <strong>event loop</strong> — a continuous cycle that checks for
+  completed I/O and runs the appropriate callbacks.
+</p>
+
+<p>The model:</p>
+<ol>
+  <li>Your code starts an async operation (read file, network request, timer)</li>
+  <li>Node hands it to <strong>libuv</strong> (C library that manages a thread pool + OS kernel calls)</li>
+  <li>Your code continues executing (non-blocking)</li>
+  <li>When the operation completes, libuv queues the callback</li>
+  <li>The event loop picks up the callback and runs it on the main thread</li>
+</ol>
+
+<div class="callout">
+  <strong>Frontend analogy:</strong> This is exactly how the browser event loop works with
+  <code>setTimeout</code>, <code>fetch</code>, and DOM events. You already understand this model —
+  Node.js just adds more I/O types (files, network, child processes).
+</div>
+
+<!-- ============================================ -->
+<h2>The 6 Phases</h2>
+
+<p>The event loop runs in a fixed order, cycling through these phases:</p>
+
+<pre><code><span class="comment">   ┌───────────────────────────┐</span>
+<span class="comment">┌─>│         timers             │ ← setTimeout, setInterval</span>
+<span class="comment">│  └─────────────┬─────────────┘</span>
+<span class="comment">│  ┌─────────────┴─────────────┐</span>
+<span class="comment">│  │     pending callbacks      │ ← I/O errors, OS callbacks</span>
+<span class="comment">│  └─────────────┬─────────────┘</span>
+<span class="comment">│  ┌─────────────┴─────────────┐</span>
+<span class="comment">│  │       idle, prepare        │ ← internal use only</span>
+<span class="comment">│  └─────────────┬─────────────┘</span>
+<span class="comment">│  ┌─────────────┴─────────────┐</span>
+<span class="comment">│  │           poll             │ ← I/O callbacks (fs, network)</span>
+<span class="comment">│  └─────────────┬─────────────┘</span>
+<span class="comment">│  ┌─────────────┴─────────────┐</span>
+<span class="comment">│  │           check            │ ← setImmediate</span>
+<span class="comment">│  └─────────────┬─────────────┘</span>
+<span class="comment">│  ┌─────────────┴─────────────┐</span>
+<span class="comment">│  │      close callbacks       │ ← socket.on('close')</span>
+<span class="comment">│  └─────────────┬─────────────┘</span>
+<span class="comment">│                 │</span>
+<span class="comment">└─────────────────┘ (loop back to timers)</span></code></pre>
+
+<table>
+  <thead>
+    <tr><th>Phase</th><th>What runs here</th><th>Example</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Timers</strong></td><td>Expired <code>setTimeout</code>/<code>setInterval</code> callbacks</td><td><code>setTimeout(fn, 100)</code></td></tr>
+    <tr><td><strong>Pending</strong></td><td>I/O error callbacks deferred from previous loop</td><td>TCP connection errors</td></tr>
+    <tr><td><strong>Idle/Prepare</strong></td><td>Internal Node.js housekeeping</td><td>You never interact with this</td></tr>
+    <tr><td><strong>Poll</strong></td><td>Retrieve new I/O events, run their callbacks</td><td><code>fs.readFile</code> callback, incoming HTTP requests</td></tr>
+    <tr><td><strong>Check</strong></td><td><code>setImmediate</code> callbacks</td><td><code>setImmediate(fn)</code></td></tr>
+    <tr><td><strong>Close</strong></td><td>Close event callbacks</td><td><code>socket.on('close', fn)</code></td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>Microtasks: Between Every Phase</h2>
+
+<p>
+  Between <strong>every</strong> phase (and after every callback), Node.js drains two microtask queues:
+</p>
+
+<ol>
+  <li><code>process.nextTick()</code> callbacks — highest priority, runs first</li>
+  <li>Promise <code>.then()</code>/<code>.catch()</code>/<code>.finally()</code> callbacks — runs second</li>
+</ol>
+
+<pre><code>setTimeout(() => console.log(<span class="string">'1: timer'</span>), <span class="number">0</span>);
+setImmediate(() => console.log(<span class="string">'2: immediate'</span>));
+Promise.resolve().then(() => console.log(<span class="string">'3: promise'</span>));
+process.<span class="function">nextTick</span>(() => console.log(<span class="string">'4: nextTick'</span>));
+console.log(<span class="string">'5: sync'</span>);
+
+<span class="comment">// Output:</span>
+<span class="comment">// 5: sync       (synchronous — runs first)</span>
+<span class="comment">// 4: nextTick   (microtask — highest priority)</span>
+<span class="comment">// 3: promise    (microtask — after nextTick)</span>
+<span class="comment">// 1: timer      (timer phase)</span>
+<span class="comment">// 2: immediate  (check phase)</span></code></pre>
+
+<div class="callout">
+  <strong>Execution order:</strong> Sync code → nextTick → Promises → Event loop phases.
+  This is the same as the browser: sync → microtasks → macrotasks.
+  <code>process.nextTick</code> is Node-specific and has no browser equivalent.
+</div>
+
+<!-- ============================================ -->
+<h2>The Poll Phase — Where Your Server Lives</h2>
+
+<p>
+  The poll phase is where Node spends most of its time. It:
+</p>
+<ul>
+  <li>Calculates how long to wait for new I/O</li>
+  <li>Runs callbacks for completed I/O (file reads, network data, DNS lookups)</li>
+  <li>If no I/O is pending and no timers are due, it <strong>blocks here waiting</strong></li>
+</ul>
+
+<p>
+  This is why an idle HTTP server uses almost zero CPU — it's blocking in the poll phase
+  waiting for incoming connections.
+</p>
+
+<!-- ============================================ -->
+<h2><code>setTimeout</code> vs <code>setImmediate</code> vs <code>process.nextTick</code></h2>
+
+<table>
+  <thead>
+    <tr><th>API</th><th>When it runs</th><th>Use for</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>setTimeout(fn, 0)</code></td>
+      <td>Next timers phase (minimum ~1ms delay)</td>
+      <td>Delay execution to next loop iteration</td>
+    </tr>
+    <tr>
+      <td><code>setImmediate(fn)</code></td>
+      <td>Check phase of current/next iteration</td>
+      <td>Run after I/O events are processed</td>
+    </tr>
+    <tr>
+      <td><code>process.nextTick(fn)</code></td>
+      <td>Before the event loop continues (microtask)</td>
+      <td>Run ASAP, before any I/O or timers</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout warning">
+  <strong>⚠️ <code>process.nextTick</code> can starve I/O.</strong> If you recursively call <code>process.nextTick</code>,
+  the event loop never advances to the poll phase — I/O callbacks never fire.
+  Prefer <code>setImmediate</code> for deferring work that shouldn't block I/O.
+</div>
+
+<!-- ============================================ -->
+<h2>Why This Matters for Full-Stack</h2>
+
+<ul>
+  <li><strong>Blocking the event loop = freezing your entire server.</strong> One <code>readFileSync</code> in a request handler blocks ALL other requests.</li>
+  <li><strong>CPU-intensive work</strong> (image processing, crypto, parsing large JSON) blocks the loop. Solution: Worker Threads or offload to a queue.</li>
+  <li><strong>Promise.resolve().then()</strong> runs before timers — this explains why <code>await</code> can sometimes execute before <code>setTimeout(..., 0)</code>.</li>
+</ul>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">Where does Node.js spend most of its time when an HTTP server is idle (no requests)?</p>
+  <button class="quiz-option" data-index="0">Timers phase — continuously checking if any setTimeout has expired</button>
+  <button class="quiz-option" data-index="1">Check phase — polling setImmediate callbacks for new work</button>
+  <button class="quiz-option" data-index="2">Poll phase — blocking and waiting for new I/O events to arrive</button>
+  <button class="quiz-option" data-index="3">Close phase — cleaning up inactive socket connections</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">What is the execution order? <code>setTimeout(fn, 0)</code>, <code>Promise.resolve().then(fn)</code>, <code>process.nextTick(fn)</code></p>
+  <button class="quiz-option" data-index="0">setTimeout → Promise → nextTick (timers run first in the loop)</button>
+  <button class="quiz-option" data-index="1">nextTick → Promise → setTimeout (microtasks drain before phases)</button>
+  <button class="quiz-option" data-index="2">Promise → nextTick → setTimeout (promises have highest priority)</button>
+  <button class="quiz-option" data-index="3">All three run simultaneously in the next event loop tick</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="nav-links">
+  <a href="0001-eventemitter-basics.html">← Lesson 1: EventEmitter Basics</a>
+  <a href="0003-practical-patterns.html">Lesson 3: Practical Event Patterns →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

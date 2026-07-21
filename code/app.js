@@ -27,7 +27,8 @@
 // );
 
 // 3-  TOCTOU (Time-of-check-to-time-of-use) race condition
-import { stat, readFile } from 'node:fs/promises';
+import { stat, readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 
 // try {
 //   await stat('configs.json'); // file exists now...
@@ -49,3 +50,24 @@ import { stat, readFile } from 'node:fs/promises';
 //     throw err;
 //   }
 // }
+// console.log({direName:import.meta.dirname,fileName:import.meta.filename , cwd:process.cwd()});
+//  List Directory Contents: readdir
+const names= await readdir("expes")
+console.log({names});
+
+const entries= await readdir("expes" ,{withFileTypes:true})
+for (const entri of entries){
+    const fullPath=join("expes",entri.name)
+    if(entri.isFile()){
+        console.log("File", fullPath);      
+    }else if
+    (entri.isDirectory()){
+        console.log("Directory", fullPath);
+
+    }
+}
+// Recursive: list all files in entire tree (Node 18.17+)
+
+const allFils=await readdir("expes",{recursive:true})
+
+console.log({allFils});

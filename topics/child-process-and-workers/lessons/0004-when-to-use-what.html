@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 4: Decision Guide — When to Use What</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Processes — Lesson 04</p>
+<h1>Decision Guide — When to Use What</h1>
+<p class="subtitle">A clear mental model for choosing between event loop, Worker Threads, child processes, and cluster.</p>
+
+<!-- ============================================ -->
+<h2>The Decision Flowchart</h2>
+
+<pre><code><span class="comment">Is the task I/O-bound (network, disk, database)?</span>
+<span class="comment">  YES → Use async/await + event loop (default Node.js)</span>
+<span class="comment">         No threads needed. This handles 99% of web server work.</span>
+<span class="comment"></span>
+<span class="comment">Is it CPU-bound (computation, parsing, crypto)?</span>
+<span class="comment">  Is it JavaScript/WASM code?</span>
+<span class="comment">    YES → Worker Threads</span>
+<span class="comment">           Shared memory, low overhead, stays in-process</span>
+<span class="comment">  Is it an external program (ffmpeg, Python, shell)?</span>
+<span class="comment">    YES → Child Process (spawn/exec)</span>
+<span class="comment">           Separate binary, streams or buffered output</span>
+<span class="comment"></span>
+<span class="comment">Do you need to scale HTTP across all CPU cores?</span>
+<span class="comment">  YES → Cluster (or PM2/Docker)</span>
+<span class="comment">         Multiple server instances sharing one port</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Real-World Scenarios</h2>
+
+<table>
+  <thead>
+    <tr><th>Scenario</th><th>Solution</th><th>Why</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Handling 10K concurrent API requests</td>
+      <td>Event loop (async/await)</td>
+      <td>I/O-bound — event loop handles this natively</td>
+    </tr>
+    <tr>
+      <td>Hash a password with bcrypt</td>
+      <td>Worker Thread (or built-in async bcrypt)</td>
+      <td>CPU-bound, ~100ms computation</td>
+    </tr>
+    <tr>
+      <td>Convert uploaded video to MP4</td>
+      <td>Child Process (spawn ffmpeg)</td>
+      <td>External binary, large streaming output</td>
+    </tr>
+    <tr>
+      <td>Parse a 100MB CSV file</td>
+      <td>Streams (event loop) OR Worker Thread</td>
+      <td>Streams if I/O-bound; worker if CPU-bound parsing</td>
+    </tr>
+    <tr>
+      <td>Generate PDF reports</td>
+      <td>Worker Thread (or child process)</td>
+      <td>CPU-bound rendering, ~200ms per PDF</td>
+    </tr>
+    <tr>
+      <td>Run <code>npm install</code> from your app</td>
+      <td>Child Process (exec/spawn)</td>
+      <td>Shell command, external process</td>
+    </tr>
+    <tr>
+      <td>Serve 50K requests/sec on 8 cores</td>
+      <td>Cluster (PM2) or containers</td>
+      <td>Scale HTTP horizontally across cores</td>
+    </tr>
+    <tr>
+      <td>Real-time image resize on upload</td>
+      <td>Worker Thread + sharp library</td>
+      <td>CPU-bound image processing in JS/native</td>
+    </tr>
+    <tr>
+      <td>Run database queries</td>
+      <td>Event loop (async/await)</td>
+      <td>I/O-bound — network wait, not CPU</td>
+    </tr>
+    <tr>
+      <td>Machine learning inference</td>
+      <td>Worker Thread or Child Process</td>
+      <td>CPU-heavy, depends on runtime (JS vs Python)</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>The Performance Mental Model</h2>
+
+<pre><code><span class="comment">┌────────────────────────────────────────────────────┐</span>
+<span class="comment">│                 Your Node.js Server                 │</span>
+<span class="comment">│                                                    │</span>
+<span class="comment">│  ┌──────────────────────────────────────────┐      │</span>
+<span class="comment">│  │           Event Loop (Main Thread)        │      │</span>
+<span class="comment">│  │                                          │      │</span>
+<span class="comment">│  │  • HTTP request handling                 │      │</span>
+<span class="comment">│  │  • Database queries (await)              │      │</span>
+<span class="comment">│  │  • File reads (await)                    │      │</span>
+<span class="comment">│  │  • JSON serialization (< 10ms)           │      │</span>
+<span class="comment">│  │  • Business logic (fast)                 │      │</span>
+<span class="comment">│  └──────────────────────────────────────────┘      │</span>
+<span class="comment">│           │                         │              │</span>
+<span class="comment">│     Offload if > 50ms          Offload if > 50ms   │</span>
+<span class="comment">│           ▼                         ▼              │</span>
+<span class="comment">│  ┌─────────────────┐    ┌─────────────────┐       │</span>
+<span class="comment">│  │ Worker Threads   │    │ libuv Thread Pool│       │</span>
+<span class="comment">│  │                 │    │                 │       │</span>
+<span class="comment">│  │ • Image resize  │    │ • fs operations │       │</span>
+<span class="comment">│  │ • PDF generation│    │ • crypto        │       │</span>
+<span class="comment">│  │ • CSV parsing   │    │ • dns.lookup    │       │</span>
+<span class="comment">│  └─────────────────┘    └─────────────────┘       │</span>
+<span class="comment">│                                                    │</span>
+<span class="comment">└────────────────────────────────────────────────────┘</span>
+<span class="comment">        │                                    │</span>
+<span class="comment">        ▼                                    ▼</span>
+<span class="comment">┌─────────────────┐              ┌─────────────────┐</span>
+<span class="comment">│ Child Processes  │              │  OS Kernel       │</span>
+<span class="comment">│                 │              │                 │</span>
+<span class="comment">│ • ffmpeg        │              │ • Network I/O   │</span>
+<span class="comment">│ • Python scripts│              │ • TCP/UDP       │</span>
+<span class="comment">│ • Shell commands│              │ • epoll/kqueue  │</span>
+<span class="comment">└─────────────────┘              └─────────────────┘</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Common Mistakes</h2>
+
+<table>
+  <thead>
+    <tr><th>Mistake</th><th>Problem</th><th>Fix</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Using Worker Thread for a database query</td>
+      <td>Pointless — DB queries are I/O-bound, not CPU</td>
+      <td>Just use <code>await db.query()</code></td>
+    </tr>
+    <tr>
+      <td>Spawning a new worker per request</td>
+      <td>Worker creation is ~5ms — adds up under load</td>
+      <td>Use a worker pool (piscina)</td>
+    </tr>
+    <tr>
+      <td>Using cluster for a single CPU-heavy endpoint</td>
+      <td>Cluster scales the entire server, not one task</td>
+      <td>Use Worker Thread for the specific task</td>
+    </tr>
+    <tr>
+      <td><code>exec(userInput)</code> for shell commands</td>
+      <td>Command injection vulnerability</td>
+      <td>Use <code>spawn</code> with args array</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">Your API endpoint calls a PostgreSQL database, waits for the result, and returns JSON. Which concurrency approach is needed?</p>
+  <button class="quiz-option" data-index="0">None extra — the event loop handles I/O-bound work with async/await</button>
+  <button class="quiz-option" data-index="1">Worker Thread — to prevent the database query from blocking</button>
+  <button class="quiz-option" data-index="2">Child Process — to run the query in an isolated process</button>
+  <button class="quiz-option" data-index="3">Cluster — to distribute database queries across CPU cores</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">You need to run a Python ML model on user-uploaded images. Which approach?</p>
+  <button class="quiz-option" data-index="0">Worker Thread — it can run any language including Python scripts</button>
+  <button class="quiz-option" data-index="1">Event loop with await — Python integrates with Node.js promises</button>
+  <button class="quiz-option" data-index="2">Child Process — spawn the Python binary as a separate OS process</button>
+  <button class="quiz-option" data-index="3">Cluster module — fork a Python worker for each CPU core</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="nav-links">
+  <a href="0003-cluster-module.html">← Lesson 3: Cluster Module</a>
+  <span>🎉 Topic Complete</span>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

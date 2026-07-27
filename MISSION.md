@@ -10,6 +10,7 @@ To become a competent full-stack developer capable of building production-grade 
 - ✅ **fs module** — 8 lessons complete. Senior-level understanding of file I/O, streams, security.
 - ✅ **HTTP protocol** — 7 lessons complete. Request/response, node:http server, routing, body parsing, JSON APIs, CORS, HTTPS/HTTP2.
 - ✅ **Events & Event Loop** — 5 lessons complete. EventEmitter, 6 phases, microtasks, blocking, Worker Threads.
+- ✅ **Child Processes & Workers** — 4 lessons complete. exec/spawn/fork, Worker Threads, Cluster, decision guide.
 - ⬜ **Express/Fastify** — next topic
 - ⬜ **Databases** — planned
 - ⬜ **Authentication** — planned

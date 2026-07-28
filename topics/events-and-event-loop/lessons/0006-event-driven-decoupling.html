@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Events Lesson 6: Event-Driven Decoupling In Depth</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Events — Lesson 06</p>
+<h1>Event-Driven Decoupling</h1>
+<p class="subtitle">Why decoupled services are easier to extend, test, and replace — and how EventEmitter makes it work in Node.js.</p>
+
+<!-- ============================================ -->
+<h2>The Problem: Tight Coupling</h2>
+
+<p>
+  Imagine an <code>OrderService</code> that, after creating an order, must:
+  send a confirmation email, update analytics, write an audit log, and notify inventory.
+  Here's the naïve approach:
+</p>
+
+<pre><code><span class="comment">// order-service.js — tightly coupled</span>
+<span class="keyword">import</span> { sendEmail } <span class="keyword">from</span> <span class="string">'./email-service.js'</span>;
+<span class="keyword">import</span> { trackEvent } <span class="keyword">from</span> <span class="string">'./analytics.js'</span>;
+<span class="keyword">import</span> { writeAudit } <span class="keyword">from</span> <span class="string">'./audit-log.js'</span>;
+<span class="keyword">import</span> { reserveStock } <span class="keyword">from</span> <span class="string">'./inventory.js'</span>;
+
+<span class="keyword">export function</span> <span class="function">createOrder</span>(order) {
+  <span class="keyword">const</span> saved = db.<span class="function">save</span>(order);
+
+  <span class="comment">// OrderService "knows" about every downstream consumer</span>
+  <span class="function">sendEmail</span>(saved);
+  <span class="function">trackEvent</span>(<span class="string">'order_created'</span>, saved);
+  <span class="function">writeAudit</span>(<span class="string">'order_created'</span>, saved);
+  <span class="function">reserveStock</span>(saved);
+
+  <span class="keyword">return</span> saved;
+}</code></pre>
+
+<p><strong>Why this hurts:</strong></p>
+<ul>
+  <li>Adding a new side-effect (e.g., push notifications) means editing <code>OrderService</code></li>
+  <li>Testing <code>createOrder</code> requires mocking 4 unrelated modules</li>
+  <li>A bug in <code>analytics.js</code> can break order creation</li>
+  <li>The import graph fans out — one file depends on everything</li>
+</ul>
+
+<!-- ============================================ -->
+<h2>The Solution: Emit, Don't Call</h2>
+
+<p>
+  With event-driven decoupling, <code>OrderService</code> only knows about <em>one thing</em>:
+  what happened. It emits a fact. Other modules decide what to do about it:
+</p>
+
+<pre><code><span class="comment">// order-service.js — decoupled</span>
+<span class="keyword">import</span> { EventEmitter } <span class="keyword">from</span> <span class="string">'node:events'</span>;
+
+<span class="keyword">class</span> <span class="function">OrderService</span> <span class="keyword">extends</span> EventEmitter {
+  <span class="function">createOrder</span>(order) {
+    <span class="keyword">const</span> saved = db.<span class="function">save</span>(order);
+    <span class="comment">// Just announce what happened — nothing else</span>
+    <span class="keyword">this</span>.<span class="function">emit</span>(<span class="string">'order:created'</span>, saved);
+    <span class="keyword">return</span> saved;
+  }
+}
+
+<span class="keyword">export const</span> orderService = <span class="keyword">new</span> <span class="function">OrderService</span>();</code></pre>
+
+<pre><code><span class="comment">// email-service.js — subscribes independently</span>
+<span class="keyword">import</span> { orderService } <span class="keyword">from</span> <span class="string">'./order-service.js'</span>;
+orderService.<span class="function">on</span>(<span class="string">'order:created'</span>, (order) => {
+  <span class="function">sendConfirmation</span>(order.email, order.id);
+});
+
+<span class="comment">// analytics.js — subscribes independently</span>
+<span class="keyword">import</span> { orderService } <span class="keyword">from</span> <span class="string">'./order-service.js'</span>;
+orderService.<span class="function">on</span>(<span class="string">'order:created'</span>, (order) => {
+  <span class="function">trackEvent</span>(<span class="string">'order_created'</span>, { orderId: order.id, total: order.total });
+});</code></pre>
+
+<p>Now: adding push notifications means creating a new file and subscribing. <code>OrderService</code> never changes.</p>
+
+<!-- ============================================ -->
+<h2>Two Patterns: Extend vs. Event Bus</h2>
+
+<p>There are two common ways to structure event-driven decoupling in Node.js:</p>
+
+<h3>Pattern A: Service extends EventEmitter</h3>
+
+<p>
+  Each service <em>is</em> an emitter. Listeners subscribe directly to the service instance.
+  This is what your <code>OrderService</code> code already does.
+</p>
+
+<pre><code><span class="comment">// The service IS the emitter</span>
+<span class="keyword">class</span> <span class="function">OrderService</span> <span class="keyword">extends</span> EventEmitter { <span class="comment">/* ... */</span> }
+<span class="keyword">const</span> orders = <span class="keyword">new</span> <span class="function">OrderService</span>();
+orders.<span class="function">on</span>(<span class="string">'order:created'</span>, handler);</code></pre>
+
+<p><strong>Good for:</strong> domain services with clear ownership. Listeners know <em>which</em> service they care about.</p>
+
+<h3>Pattern B: Shared Event Bus</h3>
+
+<p>
+  A single <code>EventEmitter</code> instance acts as a central message bus.
+  All services emit and listen through it.
+</p>
+
+<pre><code><span class="comment">// event-bus.js</span>
+<span class="keyword">import</span> { EventEmitter } <span class="keyword">from</span> <span class="string">'node:events'</span>;
+<span class="keyword">export const</span> bus = <span class="keyword">new</span> <span class="function">EventEmitter</span>();
+
+<span class="comment">// order-service.js</span>
+<span class="keyword">import</span> { bus } <span class="keyword">from</span> <span class="string">'./event-bus.js'</span>;
+bus.<span class="function">emit</span>(<span class="string">'order:created'</span>, saved);
+
+<span class="comment">// email-service.js</span>
+<span class="keyword">import</span> { bus } <span class="keyword">from</span> <span class="string">'./event-bus.js'</span>;
+bus.<span class="function">on</span>(<span class="string">'order:created'</span>, handler);</code></pre>
+
+<p><strong>Good for:</strong> cross-cutting concerns (logging, metrics) where listeners don't care <em>who</em> emitted.</p>
+
+<p><strong>Tradeoff:</strong> A bus can become a "god object" — everything routes through it, making it hard to trace which module emits what. Namespaced event names (<code>'module:action'</code>) help.</p>
+
+<!-- ============================================ -->
+<h2>Real Example: Express Middleware With Events</h2>
+
+<p>
+  In a real Express app, you might decouple request handling from side effects.
+  This is directly relevant to your next topic (Express/Fastify):
+</p>
+
+<pre><code><span class="comment">// event-bus.js</span>
+<span class="keyword">import</span> { EventEmitter } <span class="keyword">from</span> <span class="string">'node:events'</span>;
+<span class="keyword">export const</span> appEvents = <span class="keyword">new</span> <span class="function">EventEmitter</span>();
+
+<span class="comment">// routes/orders.js</span>
+<span class="keyword">import</span> { appEvents } <span class="keyword">from</span> <span class="string">'../event-bus.js'</span>;
+
+router.<span class="function">post</span>(<span class="string">'/orders'</span>, <span class="keyword">async</span> (req, res) => {
+  <span class="keyword">const</span> order = <span class="keyword">await</span> Order.<span class="function">create</span>(req.body);
+  res.<span class="function">status</span>(<span class="number">201</span>).<span class="function">json</span>(order);
+
+  <span class="comment">// Side effects happen AFTER the response</span>
+  appEvents.<span class="function">emit</span>(<span class="string">'order:created'</span>, order);
+});
+
+<span class="comment">// listeners/notifications.js — loaded at startup</span>
+<span class="keyword">import</span> { appEvents } <span class="keyword">from</span> <span class="string">'../event-bus.js'</span>;
+appEvents.<span class="function">on</span>(<span class="string">'order:created'</span>, <span class="keyword">async</span> (order) => {
+  <span class="keyword">try</span> {
+    <span class="keyword">await</span> <span class="function">sendPushNotification</span>(order.userId, <span class="string">`Order #${order.id} confirmed`</span>);
+  } <span class="keyword">catch</span> (err) {
+    logger.<span class="function">error</span>(<span class="string">'Push notification failed'</span>, err);
+  }
+});</code></pre>
+
+<p>
+  The route handler stays focused: validate, save, respond. Everything else is a separate concern.
+  This is a pattern you'll use daily in Express/Fastify backends.
+</p>
+
+<!-- ============================================ -->
+<h2>When Decoupling Goes Wrong</h2>
+
+<p>Events aren't free. Here are the pitfalls:</p>
+
+<table>
+  <thead>
+    <tr><th>Pitfall</th><th>Symptom</th><th>Fix</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Invisible control flow</strong></td>
+      <td>You can't "Find All References" to see what happens after <code>emit()</code></td>
+      <td>Document events. Use a consistent naming convention (<code>domain:action</code>)</td>
+    </tr>
+    <tr>
+      <td><strong>Order dependency</strong></td>
+      <td>Listener A must run before Listener B</td>
+      <td>Don't rely on listener order. If order matters, make it explicit with sequential calls</td>
+    </tr>
+    <tr>
+      <td><strong>Silent failures</strong></td>
+      <td>Async listener throws, nobody notices</td>
+      <td>Always wrap async listeners in try/catch (see <a href="0003-practical-patterns.html">Lesson 3</a>)</td>
+    </tr>
+    <tr>
+      <td><strong>Debugging difficulty</strong></td>
+      <td>Stack traces end at <code>emit()</code></td>
+      <td>Add correlation IDs to event payloads for tracing</td>
+    </tr>
+    <tr>
+      <td><strong>Overuse</strong></td>
+      <td>Single subscriber, no extensibility need</td>
+      <td>Just call the function directly. Events add indirection</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>Decision Framework: When to Decouple With Events</h2>
+
+<p>Use this mental model before reaching for <code>emit()</code>:</p>
+
+<pre><code><span class="comment">// Ask yourself:</span>
+
+<span class="comment">// 1. Are there (or will there be) multiple independent reactions to this action?</span>
+<span class="comment">//    YES → events make sense</span>
+
+<span class="comment">// 2. Should the caller wait for the result of these reactions?</span>
+<span class="comment">//    YES → don't use events (use async functions)</span>
+<span class="comment">//    NO  → events are perfect (fire-and-forget side effects)</span>
+
+<span class="comment">// 3. Do the reactions need to happen in a specific order?</span>
+<span class="comment">//    YES → explicit sequential calls are clearer</span>
+<span class="comment">//    NO  → events work great</span>
+
+<span class="comment">// 4. Is this crossing a process/network boundary?</span>
+<span class="comment">//    YES → use a message queue (Redis Pub/Sub, RabbitMQ)</span>
+<span class="comment">//    NO  → in-process EventEmitter is fine</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Correlation IDs: Making Events Traceable</h2>
+
+<p>
+  In production, when an event triggers multiple async side effects, you need to trace them.
+  Add a correlation ID to every event payload:
+</p>
+
+<pre><code><span class="keyword">import</span> { randomUUID } <span class="keyword">from</span> <span class="string">'node:crypto'</span>;
+
+<span class="keyword">class</span> <span class="function">OrderService</span> <span class="keyword">extends</span> EventEmitter {
+  <span class="function">createOrder</span>(order) {
+    <span class="keyword">const</span> correlationId = <span class="function">randomUUID</span>();
+    <span class="keyword">const</span> saved = db.<span class="function">save</span>(order);
+
+    <span class="keyword">this</span>.<span class="function">emit</span>(<span class="string">'order:created'</span>, {
+      ...saved,
+      correlationId,
+      timestamp: Date.now()
+    });
+
+    <span class="keyword">return</span> saved;
+  }
+}
+
+<span class="comment">// Every listener logs with the same correlationId</span>
+orderService.<span class="function">on</span>(<span class="string">'order:created'</span>, ({ correlationId, ...order }) => {
+  logger.<span class="function">info</span>(<span class="string">`[${correlationId}] Sending email for order ${order.id}`</span>);
+});</code></pre>
+
+<p>
+  When something breaks in production, you grep logs by <code>correlationId</code> and see
+  the entire chain of effects from a single event.
+</p>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">What is the main advantage of emitting events instead of directly calling downstream modules?</p>
+  <button class="quiz-option" data-index="0">Events are faster because they skip the function call overhead entirely</button>
+  <button class="quiz-option" data-index="1">The emitter doesn't need to know about or import its consumers</button>
+  <button class="quiz-option" data-index="2">Events guarantee that all listeners execute before the next line runs</button>
+  <button class="quiz-option" data-index="3">Events automatically retry failed listeners without additional code</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">You have a shared event bus with 15 different modules emitting events through it. What's the biggest risk?</p>
+  <button class="quiz-option" data-index="0">The bus will hit the max listeners limit and crash the process</button>
+  <button class="quiz-option" data-index="1">Events will be delivered out of order to the registered listeners</button>
+  <button class="quiz-option" data-index="2">It becomes hard to trace which module emitted a given event</button>
+  <button class="quiz-option" data-index="3">The bus will use too much memory by storing all event payloads</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">Your route handler creates an order, then emits 'order:created'. One listener must complete BEFORE the response is sent. What should you do?</p>
+  <button class="quiz-option" data-index="0">Use prependListener() to ensure it runs first among all listeners</button>
+  <button class="quiz-option" data-index="1">Emit the event before calling res.json() so listeners run synchronously</button>
+  <button class="quiz-option" data-index="2">Set the listener's priority property to 0 for immediate execution</button>
+  <button class="quiz-option" data-index="3">Don't use an event for that — await the function directly, then respond</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<h2>Primary Source</h2>
+
+<p>
+  Read the official Node.js Events API documentation for the complete EventEmitter contract:
+  <a href="https://nodejs.org/api/events.html" target="_blank">Node.js Events API</a>.
+  For production patterns and real-world usage, see
+  <a href="https://grizzlypeaksoftware.com/library/event-emitters-patterns-and-best-practices-6i1cisut" target="_blank">Event Emitters: Patterns and Best Practices (GrizzlyPeak, 2026)</a>.
+</p>
+
+<!-- ============================================ -->
+<h2>What's Next</h2>
+
+<p>
+  You already have working code in <code>code/event-emitter.js</code> that uses the "extends EventEmitter" pattern.
+  Try refactoring it to add a <strong>correlation ID</strong> and a second decoupled listener (maybe an "inventory" module).
+  See how adding a new side effect requires zero changes to <code>OrderService</code>.
+</p>
+
+<p>
+  This pattern will be central when you start Express/Fastify — route handlers emit events, and middleware/services react independently.
+</p>
+
+<p class="ask-agent">
+  💬 Have questions? Ask your agent: "Why would I use an event bus over extending the service class?" or "Show me how to test an event-driven service."
+</p>
+
+<div class="nav-links">
+  <a href="0005-streams-and-events-connection.html">← Lesson 5: Streams & Events</a>
+  <a href="0007-setimmediate-and-scheduling.html">Lesson 7: setImmediate & Scheduling →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

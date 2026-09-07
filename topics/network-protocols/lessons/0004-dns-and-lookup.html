@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Network Protocols 4: DNS — How Names Become Addresses</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Network Protocols — Lesson 04</p>
+<h1>DNS — How Names Become Addresses</h1>
+<p class="subtitle">From <code>api.example.com</code> to <code>93.184.216.34</code>, and the pitfalls hiding in <code>node:dns</code>.</p>
+
+<!-- ============================================ -->
+<h2>The Problem DNS Solves</h2>
+
+<p>
+  Computers communicate using IP addresses (<code>93.184.216.34</code>). Humans use names
+  (<code>api.example.com</code>). DNS — the Domain Name System — is the internet's phone book:
+  it maps names to addresses.
+</p>
+
+<p>
+  Every time your Node.js server connects to a database at <code>db.internal</code>, calls
+  a third-party API at <code>api.stripe.com</code>, or sends email through <code>smtp.sendgrid.net</code>,
+  DNS is running under the hood.
+</p>
+
+<!-- ============================================ -->
+<h2>The DNS Resolution Chain</h2>
+
+<p>
+  What actually happens when you call <code>fetch('https://api.example.com/users')</code>:
+</p>
+
+<pre><code><span class="comment">1. Browser/OS checks local cache</span>
+   → Found? Use it (skip the rest)
+
+<span class="comment">2. OS checks /etc/hosts (or Windows hosts file)</span>
+   → Found? Use it (great for local dev overrides)
+
+<span class="comment">3. Query your configured DNS resolver</span>
+   → Usually your router (192.168.1.1) or 8.8.8.8 (Google) or 1.1.1.1 (Cloudflare)
+   → Resolver checks its own cache
+
+<span class="comment">4. Resolver queries the root nameservers (13 of them, globally distributed)</span>
+   → "Who handles .com?"
+
+<span class="comment">5. Root says: "Ask the .com TLD nameserver"</span>
+   → "Who handles example.com?"
+
+<span class="comment">6. TLD says: "Ask ns1.example.com (the authoritative nameserver)"</span>
+   → "What is api.example.com?"
+
+<span class="comment">7. Authoritative server returns: api.example.com → 93.184.216.34, TTL=300</span>
+
+<span class="comment">8. Result is cached (at resolver + OS + app) for TTL seconds</span></code></pre>
+
+<p>
+  This whole chain typically completes in 20–150ms on the first query.
+  Subsequent queries hit the cache and take &lt;1ms.
+</p>
+
+<div class="callout">
+  <strong>TTL (Time-To-Live)</strong> is the number of seconds DNS clients should cache the answer.
+  A TTL of 300 = 5 minutes. Short TTLs enable fast failovers (useful during incidents).
+  Long TTLs reduce DNS load and speed up lookups. Most production APIs use 60–300s.
+</div>
+
+<!-- ============================================ -->
+<h2>DNS Record Types You'll Actually Encounter</h2>
+
+<table>
+  <thead>
+    <tr><th>Record</th><th>Maps</th><th>Example</th><th>Use case</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>A</strong></td>
+      <td>hostname → IPv4</td>
+      <td><code>api.example.com → 93.184.216.34</code></td>
+      <td>The most common — where your server lives</td>
+    </tr>
+    <tr>
+      <td><strong>AAAA</strong></td>
+      <td>hostname → IPv6</td>
+      <td><code>api.example.com → 2606:2800:220:1::</code></td>
+      <td>IPv6 equivalent of A</td>
+    </tr>
+    <tr>
+      <td><strong>CNAME</strong></td>
+      <td>hostname → hostname</td>
+      <td><code>www.example.com → example.com</code></td>
+      <td>Aliases — redirecting one name to another</td>
+    </tr>
+    <tr>
+      <td><strong>MX</strong></td>
+      <td>domain → mail servers</td>
+      <td><code>example.com → mail1.example.com</code></td>
+      <td>Email delivery routing</td>
+    </tr>
+    <tr>
+      <td><strong>TXT</strong></td>
+      <td>hostname → arbitrary text</td>
+      <td><code>example.com → "v=spf1 include:..."</code></td>
+      <td>Domain verification, SPF, DKIM, DMARC</td>
+    </tr>
+    <tr>
+      <td><strong>SRV</strong></td>
+      <td>service → host + port</td>
+      <td><code>_http._tcp → 0 5 80 srv.example.com</code></td>
+      <td>Service discovery (Kubernetes uses this)</td>
+    </tr>
+    <tr>
+      <td><strong>PTR</strong></td>
+      <td>IP → hostname</td>
+      <td><code>34.216.184.93.in-addr.arpa → api.example.com</code></td>
+      <td>Reverse DNS lookups (spam filtering, logging)</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>node:dns — Two APIs, Different Behaviours</h2>
+
+<p>
+  Node.js has <strong>two distinct DNS APIs</strong> with a critical performance difference
+  that most developers don't know about:
+</p>
+
+<h3>dns.lookup() — Uses the OS resolver</h3>
+
+<pre><code><span class="keyword">import</span> dns <span class="keyword">from</span> <span class="string">'node:dns'</span>;
+
+<span class="comment">// Uses getaddrinfo() — the OS's own resolver</span>
+<span class="comment">// This is what http.request(), https.request(), fetch() use internally</span>
+dns.<span class="function">lookup</span>(<span class="string">'api.example.com'</span>, (err, address, family) => {
+  console.<span class="function">log</span>(address); <span class="comment">// '93.184.216.34'</span>
+  console.<span class="function">log</span>(family);  <span class="comment">// 4 (IPv4) or 6 (IPv6)</span>
+});
+
+<span class="comment">// Promise-based (dns/promises)</span>
+<span class="keyword">import</span> { lookup } <span class="keyword">from</span> <span class="string">'node:dns/promises'</span>;
+
+<span class="keyword">const</span> { address } = <span class="keyword">await</span> <span class="function">lookup</span>(<span class="string">'api.example.com'</span>);
+console.<span class="function">log</span>(address);</code></pre>
+
+<div class="callout danger">
+  <strong>dns.lookup() blocks the thread pool.</strong>
+  It calls the OS's synchronous <code>getaddrinfo()</code>, which runs in libuv's thread pool
+  (shared with <code>fs</code> operations). Under high concurrency, this can cause a thread pool
+  bottleneck. It's fine for low-frequency lookups; problematic if you're resolving thousands of
+  hostnames per second.
+</div>
+
+<h3>dns.resolve() — Uses Node's own resolver</h3>
+
+<pre><code><span class="keyword">import</span> { Resolver } <span class="keyword">from</span> <span class="string">'node:dns/promises'</span>;
+
+<span class="keyword">const</span> resolver = <span class="keyword">new</span> <span class="function">Resolver</span>();
+<span class="comment">// Optional: use a specific DNS server</span>
+resolver.<span class="function">setServers</span>([<span class="string">'8.8.8.8'</span>, <span class="string">'1.1.1.1'</span>]);
+
+<span class="comment">// Resolve A records (IPv4 addresses)</span>
+<span class="keyword">const</span> addresses = <span class="keyword">await</span> resolver.<span class="function">resolve4</span>(<span class="string">'api.example.com'</span>);
+console.<span class="function">log</span>(addresses); <span class="comment">// ['93.184.216.34']</span>
+
+<span class="comment">// Resolve MX records</span>
+<span class="keyword">const</span> mxRecords = <span class="keyword">await</span> resolver.<span class="function">resolveMx</span>(<span class="string">'example.com'</span>);
+<span class="comment">// [{ exchange: 'mail.example.com', priority: 10 }]</span>
+
+<span class="comment">// Resolve TXT records (for verification)</span>
+<span class="keyword">const</span> txtRecords = <span class="keyword">await</span> resolver.<span class="function">resolveTxt</span>(<span class="string">'example.com'</span>);
+
+<span class="comment">// Reverse lookup: IP → hostname</span>
+<span class="keyword">const</span> hostnames = <span class="keyword">await</span> resolver.<span class="function">reverse</span>(<span class="string">'93.184.216.34'</span>);</code></pre>
+
+<div class="callout">
+  <strong>dns.resolve() is non-blocking.</strong> It sends the DNS query as a UDP datagram
+  (from <code>node:dgram</code> internally) and handles the response asynchronously.
+  It never touches the thread pool. This is better for high-concurrency use cases.
+</div>
+
+<!-- ============================================ -->
+<h2>The lookup() vs resolve() Decision Tree</h2>
+
+<table>
+  <thead>
+    <tr><th></th><th>dns.lookup()</th><th>dns.resolve()</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Blocking?</td><td>Thread pool (libuv)</td><td>Fully async (event loop)</td></tr>
+    <tr><td>Respects /etc/hosts?</td><td>Yes</td><td>No</td></tr>
+    <tr><td>Works for custom record types?</td><td>No — only A/AAAA</td><td>Yes — MX, TXT, SRV, etc.</td></tr>
+    <tr><td>Matches what fetch() uses?</td><td>Yes (same OS resolver)</td><td>No (different path)</td></tr>
+    <tr><td>Good for high-volume lookups?</td><td>No</td><td>Yes</td></tr>
+    <tr><td>Use when...</td><td>Simple hostname → IP for your own requests</td><td>Querying specific record types or at scale</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>DNS Caching Pitfalls in Node.js</h2>
+
+<div class="callout warning">
+  <strong>Node.js does not cache DNS results.</strong> Unlike browsers, the Node.js DNS resolver
+  does not respect TTLs and cache results. Every call to <code>dns.lookup()</code> or
+  <code>dns.resolve()</code> triggers a fresh OS or network lookup.
+</div>
+
+<p>
+  This has real consequences:
+</p>
+<ul>
+  <li>Your app makes 1000 requests to <code>api.stripe.com</code> → potentially 1000 DNS queries</li>
+  <li>In practice, the OS resolver caches, but that's outside Node's control</li>
+  <li>In containers (Docker/Kubernetes), DNS caches may be very short or absent</li>
+</ul>
+
+<p>
+  <strong>Solutions:</strong>
+</p>
+
+<pre><code><span class="comment">// Option 1: Use a caching DNS library</span>
+<span class="comment">// e.g., 'cacheable-lookup' (used by got, axios v1)</span>
+<span class="keyword">import</span> CacheableLookup <span class="keyword">from</span> <span class="string">'cacheable-lookup'</span>;
+<span class="keyword">const</span> cacheable = <span class="keyword">new</span> <span class="function">CacheableLookup</span>();
+cacheable.<span class="function">install</span>(http.globalAgent); <span class="comment">// patches the http agent</span>
+
+<span class="comment">// Option 2: Resolve once on startup and reuse the IP</span>
+<span class="keyword">const</span> { address } = <span class="keyword">await</span> <span class="function">lookup</span>(<span class="string">'db.internal'</span>);
+<span class="comment">// Connect to address directly, skip DNS on every request</span>
+
+<span class="comment">// Option 3: Use connection pooling (the agent holds persistent connections)</span>
+<span class="comment">// This way DNS only runs when a new connection is needed, not per request</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">What does a DNS A record map?</p>
+  <button class="quiz-option" data-index="0">A domain name to a list of authorized mail server hostnames</button>
+  <button class="quiz-option" data-index="1">An IP address back to a hostname (reverse lookup for logging)</button>
+  <button class="quiz-option" data-index="2">A hostname to an IPv4 address — the most fundamental DNS record</button>
+  <button class="quiz-option" data-index="3">One hostname to another hostname as an alias or redirect</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">Why can <code>dns.lookup()</code> cause performance problems under high concurrency?</p>
+  <button class="quiz-option" data-index="0">It uses libuv's thread pool via getaddrinfo() — same pool as fs operations</button>
+  <button class="quiz-option" data-index="1">It caches results for too long, causing stale addresses to be returned</button>
+  <button class="quiz-option" data-index="2">It opens a new TCP connection for each lookup, exhausting port numbers</button>
+  <button class="quiz-option" data-index="3">It bypasses the OS resolver and hits root nameservers directly every time</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">What does the DNS TTL value control?</p>
+  <button class="quiz-option" data-index="0">How long a TCP connection can remain open after the last DNS lookup</button>
+  <button class="quiz-option" data-index="1">The maximum size of a DNS response packet before TCP fallback is used</button>
+  <button class="quiz-option" data-index="2">How long the authoritative nameserver keeps the record in its database</button>
+  <button class="quiz-option" data-index="3">How long clients and resolvers should cache the DNS answer in seconds</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<h2>Primary Source</h2>
+<p>
+  Node.js docs: <a href="https://nodejs.org/api/dns.html" target="_blank">node:dns API reference</a> — pay special attention to the
+  <em>Implementation Considerations</em> section about <code>lookup()</code> vs <code>resolve()</code>.
+  Also: <a href="https://www.cloudflare.com/learning/dns/what-is-dns/" target="_blank">Cloudflare: What is DNS?</a> for protocol foundations.
+</p>
+
+<div class="followup">
+  <strong>Questions?</strong> Ask me about DNS-over-HTTPS (DoH), how Kubernetes DNS works
+  (<code>ClusterIP</code> and <code>kube-dns</code>), split-horizon DNS, or DNSSEC.
+</div>
+
+<div class="nav-links">
+  <a href="0003-udp-dgram.html">← Lesson 3: UDP and node:dgram</a>
+  <a href="0005-tls-and-security.html">Lesson 5: TLS — Encryption on the Wire →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

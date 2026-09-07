@@ -11,6 +11,7 @@ To become a competent full-stack developer capable of building production-grade 
 - ✅ **HTTP protocol** — 7 lessons complete. Request/response, node:http server, routing, body parsing, JSON APIs, CORS, HTTPS/HTTP2.
 - ✅ **Events & Event Loop** — 7 lessons complete. EventEmitter, 6 phases, microtasks, blocking, Worker Threads, event-driven decoupling, setImmediate & scheduling.
 - ✅ **Child Processes & Workers** — 4 lessons complete. exec/spawn/fork, Worker Threads, Cluster, decision guide.
+- 🔄 **Network Protocols** — in progress. TCP, UDP/dgram, DNS, TLS. The transport and security layers beneath HTTP.
 - ⬜ **Express/Fastify** — next topic
 - ⬜ **Databases** — planned
 - ⬜ **Authentication** — planned

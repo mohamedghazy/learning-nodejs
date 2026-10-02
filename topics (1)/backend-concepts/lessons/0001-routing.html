@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Backend Concepts Lesson 1: Routing Deep Dive</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Backend Concepts — Lesson 01</p>
+<h1>Routing Deep Dive</h1>
+<p class="subtitle">How web frameworks match URLs to handlers — route parameters, patterns, precedence, and modular routers.</p>
+
+<!-- ============================================ -->
+<h2>What Is Routing?</h2>
+
+<p><strong>Routing</strong> is the mechanism that determines which code handles a given HTTP request. It's the answer to: "When a request for <code>GET /users/42</code> arrives, what function should run?"</p>
+
+<p>In raw <code>node:http</code>, you did this manually:</p>
+
+<pre><code><span class="keyword">if</span> (req.method === <span class="string">'GET'</span> && req.url.startsWith(<span class="string">'/users/'</span>)) {
+  <span class="keyword">const</span> id = req.url.split(<span class="string">'/'</span>)[<span class="number">2</span>];
+  <span class="comment">// handle it</span>
+}</code></pre>
+
+<p>Frameworks like Express replace this with a declarative routing API:</p>
+
+<pre><code>app.get(<span class="string">'/users/:id'</span>, (req, res) => {
+  <span class="keyword">const</span> id = req.params.id;
+  <span class="comment">// handle it</span>
+});</code></pre>
+
+<p>But there's much more depth here than it appears. These concepts apply to Express, Fastify, Koa, Hono, and most other Node.js frameworks.</p>
+
+<!-- ============================================ -->
+<h2>Route Definition Anatomy</h2>
+
+<pre><code>app.<span class="function">METHOD</span>(PATH, HANDLER)</code></pre>
+
+<table>
+  <tr>
+    <th>Component</th>
+    <th>What it is</th>
+    <th>Example</th>
+  </tr>
+  <tr>
+    <td><code>app</code></td>
+    <td>Framework application instance</td>
+    <td><code>const app = express()</code></td>
+  </tr>
+  <tr>
+    <td><code>METHOD</code></td>
+    <td>HTTP method (lowercase)</td>
+    <td><code>get</code>, <code>post</code>, <code>put</code>, <code>patch</code>, <code>delete</code>, <code>all</code></td>
+  </tr>
+  <tr>
+    <td><code>PATH</code></td>
+    <td>URL pattern to match</td>
+    <td><code>'/users'</code>, <code>'/users/:id'</code>, <code>/^\/api\//</code></td>
+  </tr>
+  <tr>
+    <td><code>HANDLER</code></td>
+    <td>Function(s) to execute</td>
+    <td><code>(req, res) => {}</code> or <code>[fn1, fn2]</code></td>
+  </tr>
+</table>
+
+<!-- ============================================ -->
+<h2>HTTP Method Matching</h2>
+
+<p>Each HTTP method has its own route method:</p>
+
+<pre><code>app.get(<span class="string">'/resource'</span>, handler);     <span class="comment">// GET requests only</span>
+app.post(<span class="string">'/resource'</span>, handler);    <span class="comment">// POST requests only</span>
+app.put(<span class="string">'/resource'</span>, handler);     <span class="comment">// PUT requests only</span>
+app.patch(<span class="string">'/resource'</span>, handler);   <span class="comment">// PATCH requests only</span>
+app.delete(<span class="string">'/resource'</span>, handler);  <span class="comment">// DELETE requests only</span>
+
+<span class="comment">// Match ANY HTTP method</span>
+app.all(<span class="string">'/resource'</span>, handler);     <span class="comment">// GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD...</span></code></pre>
+
+<p><code>app.all()</code> is useful for middleware that should run for all methods on a path:</p>
+
+<pre><code><span class="comment">// Log every request to /api/* regardless of method</span>
+app.all(<span class="string">'/api/*'</span>, (req, res, next) => {
+  console.log(<span class="string">`<span class="keyword">${</span>req.method<span class="keyword">}</span> <span class="keyword">${</span>req.path<span class="keyword">}</span>`</span>);
+  next();
+});</code></pre>
+
+<!-- ============================================ -->
+<h2>Route Parameters (Dynamic Segments)</h2>
+
+<p>Route parameters capture dynamic parts of the URL:</p>
+
+<pre><code><span class="comment">// :id is a route parameter</span>
+app.get(<span class="string">'/users/:id'</span>, (req, res) => {
+  console.log(req.params);  <span class="comment">// { id: '42' }</span>
+  res.json({ userId: req.params.id });
+});
+
+<span class="comment">// Multiple parameters</span>
+app.get(<span class="string">'/users/:userId/posts/:postId'</span>, (req, res) => {
+  console.log(req.params);  <span class="comment">// { userId: '42', postId: '7' }</span>
+});
+
+<span class="comment">// Parameters are ALWAYS strings</span>
+app.get(<span class="string">'/users/:id'</span>, (req, res) => {
+  <span class="keyword">const</span> id = req.params.id;          <span class="comment">// '42' (string)</span>
+  <span class="keyword">const</span> numId = Number(req.params.id); <span class="comment">// 42 (number)</span>
+});</code></pre>
+
+<div class="callout warning">
+  <strong>Important:</strong> Route parameters are always strings. If you need a number, parse it explicitly.
+  <code>'/users/42'</code> → <code>req.params.id === '42'</code> (not <code>42</code>).
+</div>
+
+<h3>Parameter Constraints with Regex</h3>
+
+<p>You can constrain what a parameter matches using regex in parentheses:</p>
+
+<pre><code><span class="comment">// Only match if :id is digits</span>
+app.get(<span class="string">'/users/:id(\\d+)'</span>, (req, res) => {
+  <span class="comment">// /users/42 ✓ matches</span>
+  <span class="comment">// /users/abc ✗ does NOT match (falls through)</span>
+  res.json({ id: req.params.id });
+});
+
+<span class="comment">// Only match UUIDs</span>
+app.get(<span class="string">'/items/:uuid([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'</span>, handler);</code></pre>
+
+<!-- ============================================ -->
+<h2>Query Strings</h2>
+
+<p>Query strings (<code>?key=value</code>) are NOT part of the route pattern. They're parsed into <code>req.query</code>:</p>
+
+<pre><code><span class="comment">// Route: /search</span>
+<span class="comment">// URL:   /search?q=express&amp;limit=10&amp;page=2</span>
+
+app.get(<span class="string">'/search'</span>, (req, res) => {
+  console.log(req.query);
+  <span class="comment">// { q: 'express', limit: '10', page: '2' }</span>
+
+  <span class="comment">// All values are strings — parse as needed</span>
+  <span class="keyword">const</span> limit = parseInt(req.query.limit, <span class="number">10</span>) || <span class="number">20</span>;
+  <span class="keyword">const</span> page = parseInt(req.query.page, <span class="number">10</span>) || <span class="number">1</span>;
+
+  res.json({ query: req.query.q, limit, page });
+});</code></pre>
+
+<p><strong>Key difference from route params:</strong></p>
+<ul>
+  <li>Route params (<code>:id</code>) — part of the URL structure, required for route to match</li>
+  <li>Query strings (<code>?key=val</code>) — optional metadata, always available on <code>req.query</code></li>
+</ul>
+
+<!-- ============================================ -->
+<h2>Route Patterns</h2>
+
+<p>Most frameworks support several pattern types beyond simple strings:</p>
+
+<h3>1. Exact Match</h3>
+<pre><code>app.get(<span class="string">'/about'</span>, handler);  <span class="comment">// Only /about</span></code></pre>
+
+<h3>2. Route Parameters</h3>
+<pre><code>app.get(<span class="string">'/users/:id'</span>, handler);  <span class="comment">// /users/anything</span></code></pre>
+
+<h3>3. Optional Parameters</h3>
+<pre><code>app.get(<span class="string">'/users/:id?'</span>, handler);  <span class="comment">// /users OR /users/42</span></code></pre>
+
+<h3>4. Wildcard (*)</h3>
+<pre><code><span class="comment">// Match anything starting with /api/</span>
+app.get(<span class="string">'/api/*'</span>, handler);  <span class="comment">// /api/users, /api/posts/42, etc.</span>
+
+<span class="comment">// Capture the wildcard part</span>
+app.get(<span class="string">'/files/*'</span>, (req, res) => {
+  <span class="comment">// req.params[0] contains everything after /files/</span>
+  <span class="comment">// /files/images/logo.png → req.params[0] === 'images/logo.png'</span>
+});</code></pre>
+
+<h3>5. Regular Expressions</h3>
+<pre><code><span class="comment">// Match any route containing 'fly'</span>
+app.get(<span class="string">/fly/</span>, handler);  <span class="comment">// /butterfly, /dragonfly, /fly</span>
+
+<span class="comment">// Match routes ending in 'fly'</span>
+app.get(<span class="string">/.*fly$/</span>, handler);  <span class="comment">// /butterfly, /dragonfly (not /flying)</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Route Precedence (Order Matters)</h2>
+
+<p>Most frameworks match routes in the order they're defined. First match wins:</p>
+
+<pre><code><span class="comment">// ❌ WRONG ORDER — /users/new never matches</span>
+app.get(<span class="string">'/users/:id'</span>, (req, res) => {
+  res.send(<span class="string">`User <span class="keyword">${</span>req.params.id<span class="keyword">}</span>`</span>);
+});
+app.get(<span class="string">'/users/new'</span>, (req, res) => {
+  res.send(<span class="string">'Create user form'</span>);  <span class="comment">// Never reached! 'new' matches :id</span>
+});
+
+<span class="comment">// ✓ CORRECT ORDER — specific routes first</span>
+app.get(<span class="string">'/users/new'</span>, (req, res) => {
+  res.send(<span class="string">'Create user form'</span>);  <span class="comment">// /users/new matches here</span>
+});
+app.get(<span class="string">'/users/:id'</span>, (req, res) => {
+  res.send(<span class="string">`User <span class="keyword">${</span>req.params.id<span class="keyword">}</span>`</span>);  <span class="comment">// /users/42 matches here</span>
+});</code></pre>
+
+<div class="callout">
+  <strong>Rule of thumb:</strong> Define specific routes before parameterized routes.
+  <code>/users/new</code> before <code>/users/:id</code>. Otherwise <code>'new'</code> gets captured as an <code>:id</code>.
+</div>
+
+<!-- ============================================ -->
+<h2>Multiple Handlers per Route</h2>
+
+<p>A route can have multiple handler functions. They execute in order:</p>
+
+<pre><code><span class="comment">// Method 1: Multiple arguments</span>
+app.get(<span class="string">'/users/:id'</span>,
+  validateId,
+  loadUser,
+  sendUser
+);
+
+<span class="comment">// Method 2: Array of handlers</span>
+app.get(<span class="string">'/users/:id'</span>, [validateId, loadUser, sendUser]);
+
+<span class="comment">// Each handler must call next() to continue to the next one</span>
+<span class="keyword">function</span> <span class="function">validateId</span>(req, res, next) {
+  <span class="keyword">if</span> (!/^\d+$/.test(req.params.id)) {
+    <span class="keyword">return</span> res.status(<span class="number">400</span>).json({ error: <span class="string">'Invalid ID'</span> });
+  }
+  next();  <span class="comment">// Continue to loadUser</span>
+}
+
+<span class="keyword">function</span> <span class="function">loadUser</span>(req, res, next) {
+  req.user = { id: req.params.id, name: <span class="string">'Mohamed'</span> };  <span class="comment">// Attach to req</span>
+  next();  <span class="comment">// Continue to sendUser</span>
+}
+
+<span class="keyword">function</span> <span class="function">sendUser</span>(req, res) {
+  res.json(req.user);  <span class="comment">// No next() — this is the final handler</span>
+}</code></pre>
+
+<p>This is actually middleware in action — more on that in <a href="0002-middleware.html">Lesson 2: Middleware</a>.</p>
+
+<!-- ============================================ -->
+<h2>Modular Routing (Express Router)</h2>
+
+<p>As your app grows, putting all routes in one file becomes unwieldy. <code>express.Router()</code> lets you create modular route handlers:</p>
+
+<pre><code><span class="comment">// routes/users.js</span>
+<span class="keyword">import</span> { Router } <span class="keyword">from</span> <span class="string">'express'</span>;
+
+<span class="keyword">const</span> router = <span class="function">Router</span>();
+
+router.get(<span class="string">'/'</span>, (req, res) => {
+  res.json({ users: [] });
+});
+
+router.get(<span class="string">'/:id'</span>, (req, res) => {
+  res.json({ userId: req.params.id });
+});
+
+router.post(<span class="string">'/'</span>, (req, res) => {
+  res.status(<span class="number">201</span>).json({ created: <span class="keyword">true</span> });
+});
+
+<span class="keyword">export default</span> router;</code></pre>
+
+<pre><code><span class="comment">// app.js</span>
+<span class="keyword">import</span> express <span class="keyword">from</span> <span class="string">'express'</span>;
+<span class="keyword">import</span> usersRouter <span class="keyword">from</span> <span class="string">'./routes/users.js'</span>;
+<span class="keyword">import</span> postsRouter <span class="keyword">from</span> <span class="string">'./routes/posts.js'</span>;
+
+<span class="keyword">const</span> app = <span class="function">express</span>();
+
+<span class="comment">// Mount routers at path prefixes</span>
+app.use(<span class="string">'/users'</span>, usersRouter);  <span class="comment">// /users, /users/:id</span>
+app.use(<span class="string">'/posts'</span>, postsRouter);  <span class="comment">// /posts, /posts/:id</span>
+
+app.listen(<span class="number">3000</span>);</code></pre>
+
+<p>The router's internal routes are relative to where it's mounted:</p>
+<ul>
+  <li><code>router.get('/')</code> mounted at <code>/users</code> → handles <code>GET /users</code></li>
+  <li><code>router.get('/:id')</code> mounted at <code>/users</code> → handles <code>GET /users/42</code></li>
+</ul>
+
+<h3>Nested Routers</h3>
+
+<pre><code><span class="comment">// routes/users.js</span>
+<span class="keyword">import</span> { Router } <span class="keyword">from</span> <span class="string">'express'</span>;
+<span class="keyword">import</span> postsRouter <span class="keyword">from</span> <span class="string">'./userPosts.js'</span>;
+
+<span class="keyword">const</span> router = <span class="function">Router</span>();
+
+router.get(<span class="string">'/:id'</span>, getUser);
+router.use(<span class="string">'/:userId/posts'</span>, postsRouter);  <span class="comment">// Nested!</span>
+
+<span class="keyword">export default</span> router;
+
+<span class="comment">// routes/userPosts.js — handles /users/:userId/posts/*</span>
+<span class="keyword">const</span> router = <span class="function">Router</span>({ mergeParams: <span class="keyword">true</span> });  <span class="comment">// Access parent's :userId</span>
+
+router.get(<span class="string">'/'</span>, (req, res) => {
+  <span class="comment">// req.params.userId available because of mergeParams</span>
+  res.json({ userId: req.params.userId, posts: [] });
+});
+
+<span class="keyword">export default</span> router;</code></pre>
+
+<div class="callout">
+  <strong><code>mergeParams: true</code></strong> — Essential for nested routers. Without it, the child router
+  can't access route parameters defined in the parent (<code>:userId</code>).
+</div>
+
+<!-- ============================================ -->
+<h2>Route Chaining</h2>
+
+<p>When you have multiple methods for the same path, chain them:</p>
+
+<pre><code><span class="comment">// Instead of:</span>
+app.get(<span class="string">'/users'</span>, getUsers);
+app.post(<span class="string">'/users'</span>, createUser);
+app.delete(<span class="string">'/users'</span>, deleteAllUsers);
+
+<span class="comment">// Use route chaining:</span>
+app.route(<span class="string">'/users'</span>)
+  .get(getUsers)
+  .post(createUser)
+  .delete(deleteAllUsers);
+
+app.route(<span class="string">'/users/:id'</span>)
+  .get(getUser)
+  .put(updateUser)
+  .delete(deleteUser);</code></pre>
+
+<p>Same functionality, cleaner code, and no risk of typos in repeated paths.</p>
+
+<!-- ============================================ -->
+<h2>The 404 Catch-All</h2>
+
+<p>If no route matches, the framework sends a default 404. To customize it, add a catch-all at the end:</p>
+
+<pre><code><span class="comment">// All your routes first...</span>
+app.get(<span class="string">'/'</span>, homeHandler);
+app.use(<span class="string">'/users'</span>, usersRouter);
+app.use(<span class="string">'/posts'</span>, postsRouter);
+
+<span class="comment">// Then the 404 catch-all (no path = matches everything)</span>
+app.use((req, res) => {
+  res.status(<span class="number">404</span>).json({
+    error: <span class="string">'Not Found'</span>,
+    path: req.path,
+    method: req.method
+  });
+});</code></pre>
+
+<p>This must be <strong>last</strong>. Routes are checked in order — if this came first, nothing else would ever match.</p>
+
+<!-- ============================================ -->
+<h2>Hands-On Exercise</h2>
+
+<p>Build a mini REST API for a bookstore:</p>
+
+<pre><code><span class="comment">// Structure:</span>
+<span class="comment">// GET    /books          - list all books</span>
+<span class="comment">// GET    /books/new      - show "add book" info</span>
+<span class="comment">// GET    /books/:id      - get one book</span>
+<span class="comment">// POST   /books          - create book</span>
+<span class="comment">// PUT    /books/:id      - update book</span>
+<span class="comment">// DELETE /books/:id      - delete book</span>
+<span class="comment">// GET    /search?q=...   - search books</span>
+
+<span class="comment">// Requirements:</span>
+<span class="comment">// 1. /books/new must come before /books/:id</span>
+<span class="comment">// 2. Use app.route() for /books and /books/:id</span>
+<span class="comment">// 3. Add a 404 catch-all</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Primary Source</h2>
+
+<p>
+  📖 Read: <a href="https://expressjs.com/en/guide/routing.html" target="_blank">Express.js — Routing Guide</a> (official docs)
+</p>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">You define <code>app.get('/users/:id')</code> before <code>app.get('/users/new')</code>. What happens when a request for <code>GET /users/new</code> arrives?</p>
+  <button class="quiz-option" data-index="0">The framework returns a 404 Not Found error</button>
+  <button class="quiz-option" data-index="1">The first route matches with req.params.id equal to 'new'</button>
+  <button class="quiz-option" data-index="2">The second route matches because 'new' is not a valid ID</button>
+  <button class="quiz-option" data-index="3">The framework throws an error due to ambiguous routing</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">What is the type of <code>req.params.id</code> when the URL is <code>/users/42</code>?</p>
+  <button class="quiz-option" data-index="0">number</button>
+  <button class="quiz-option" data-index="1">undefined</button>
+  <button class="quiz-option" data-index="2">object</button>
+  <button class="quiz-option" data-index="3">string</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">What does <code>{ mergeParams: true }</code> do when creating a Router?</p>
+  <button class="quiz-option" data-index="0">Merges query string parameters with route parameters</button>
+  <button class="quiz-option" data-index="1">Combines multiple routers into a single router instance</button>
+  <button class="quiz-option" data-index="2">Allows the router to access route params from its parent router</button>
+  <button class="quiz-option" data-index="3">Automatically parses JSON body into req.params</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">Where should you place a 404 catch-all route in your app?</p>
+  <button class="quiz-option" data-index="0">After all other routes as the very last route definition</button>
+  <button class="quiz-option" data-index="1">Before all other routes as the first route definition</button>
+  <button class="quiz-option" data-index="2">It doesn't matter since routes are checked by specificity</button>
+  <button class="quiz-option" data-index="3">Inside a separate error handling middleware file</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<div class="nav-links">
+  <span></span>
+  <a href="0002-middleware.html">Lesson 2: Middleware →</a>
+</div>
+
+<div class="followup">
+  💬 <strong>Questions?</strong> Routing is fundamental — ask about anything unclear.
+  Route precedence and nested routers are common sources of bugs.
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

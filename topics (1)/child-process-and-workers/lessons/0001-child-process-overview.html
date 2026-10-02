@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 1: Child Processes — Running External Programs From Node.js</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Processes — Lesson 01</p>
+<h1>Child Processes Overview</h1>
+<p class="subtitle">Run shell commands, execute scripts, and offload work — all without blocking your server.</p>
+
+<!-- ============================================ -->
+<h2>Why Child Processes?</h2>
+
+<p>Node.js is single-threaded. But sometimes you need to:</p>
+<ul>
+  <li><strong>Run system commands</strong> — <code>git status</code>, <code>ffmpeg</code>, <code>docker build</code></li>
+  <li><strong>Execute other languages</strong> — Python scripts, shell scripts, Go binaries</li>
+  <li><strong>Isolate crash-prone code</strong> — if it crashes, your main process survives</li>
+  <li><strong>Use all CPU cores</strong> — one process per core for compute-heavy work</li>
+</ul>
+
+<p>
+  The <code>node:child_process</code> module spawns new OS processes. Each child process has its own
+  memory, its own V8 instance (if Node), and communicates with the parent via IPC
+  (Inter-Process Communication) or stdio streams.
+</p>
+
+<!-- ============================================ -->
+<h2>The Four Methods</h2>
+
+<table>
+  <thead>
+    <tr><th>Method</th><th>When to Use</th><th>Output</th><th>Shell?</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>exec(cmd)</code></td>
+      <td>Short commands, small output (&lt;1MB)</td>
+      <td>Buffered (entire stdout/stderr as string)</td>
+      <td>Yes</td>
+    </tr>
+    <tr>
+      <td><code>execFile(file, args)</code></td>
+      <td>Run a specific binary without a shell</td>
+      <td>Buffered</td>
+      <td>No (safer)</td>
+    </tr>
+    <tr>
+      <td><code>spawn(cmd, args)</code></td>
+      <td>Long-running, large output (streaming)</td>
+      <td>Streams (stdout/stderr as Readable)</td>
+      <td>No (optional)</td>
+    </tr>
+    <tr>
+      <td><code>fork(modulePath)</code></td>
+      <td>Run another Node.js script with IPC channel</td>
+      <td>IPC messages + stdio</td>
+      <td>No</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2><code>exec</code> — Quick Shell Commands</h2>
+
+<pre><code><span class="keyword">import</span> { exec } <span class="keyword">from</span> <span class="string">'node:child_process'</span>;
+<span class="keyword">import</span> { promisify } <span class="keyword">from</span> <span class="string">'node:util'</span>;
+
+<span class="keyword">const</span> execAsync = <span class="function">promisify</span>(exec);
+
+<span class="keyword">try</span> {
+  <span class="keyword">const</span> { stdout, stderr } = <span class="keyword">await</span> <span class="function">execAsync</span>(<span class="string">'git log --oneline -5'</span>);
+  console.log(stdout);
+  <span class="keyword">if</span> (stderr) console.error(<span class="string">'stderr:'</span>, stderr);
+} <span class="keyword">catch</span> (err) {
+  console.error(<span class="string">'Command failed:'</span>, err.message);
+  console.error(<span class="string">'Exit code:'</span>, err.code);
+}</code></pre>
+
+<div class="callout warning">
+  <strong>Security:</strong> <code>exec</code> runs in a shell. Never pass user input directly:
+  <code>exec(`ls ${userInput}`)</code> is a <strong>command injection</strong> vulnerability.
+  Use <code>execFile</code> or <code>spawn</code> with args array for untrusted input.
+</div>
+
+<!-- ============================================ -->
+<h2><code>spawn</code> — Streaming Output</h2>
+
+<p>For long-running processes or large output, <code>spawn</code> gives you streams:</p>
+
+<pre><code><span class="keyword">import</span> { spawn } <span class="keyword">from</span> <span class="string">'node:child_process'</span>;
+
+<span class="keyword">const</span> child = <span class="function">spawn</span>(<span class="string">'find'</span>, [<span class="string">'.'</span>, <span class="string">'-name'</span>, <span class="string">'*.js'</span>]);
+
+child.stdout.<span class="function">on</span>(<span class="string">'data'</span>, (chunk) => {
+  console.log(<span class="string">'Found:'</span>, chunk.toString());
+});
+
+child.stderr.<span class="function">on</span>(<span class="string">'data'</span>, (chunk) => {
+  console.error(<span class="string">'Error:'</span>, chunk.toString());
+});
+
+child.<span class="function">on</span>(<span class="string">'close'</span>, (code) => {
+  console.log(<span class="string">`Process exited with code ${code}`</span>);
+});</code></pre>
+
+<p>
+  <code>child.stdout</code> and <code>child.stderr</code> are Readable streams — everything from your
+  fs/streams lessons applies. You can pipe, transform, or collect chunks.
+</p>
+
+<!-- ============================================ -->
+<h2><code>fork</code> — Node.js-to-Node.js Communication</h2>
+
+<p>
+  <code>fork()</code> is specialized for running another Node.js script. It automatically
+  creates an IPC channel for message passing:
+</p>
+
+<pre><code><span class="comment">// parent.js</span>
+<span class="keyword">import</span> { fork } <span class="keyword">from</span> <span class="string">'node:child_process'</span>;
+
+<span class="keyword">const</span> child = <span class="function">fork</span>(<span class="string">'./worker.js'</span>);
+
+child.<span class="function">send</span>({ task: <span class="string">'processData'</span>, data: [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>] });
+
+child.<span class="function">on</span>(<span class="string">'message'</span>, (result) => {
+  console.log(<span class="string">'Result from child:'</span>, result);
+});
+
+<span class="comment">// worker.js</span>
+process.<span class="function">on</span>(<span class="string">'message'</span>, (msg) => {
+  <span class="keyword">const</span> result = msg.data.map(x => x * <span class="number">2</span>);
+  process.<span class="function">send</span>({ result });
+});</code></pre>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">You need to run <code>ffmpeg</code> to convert a video. The output is 2GB. Which method?</p>
+  <button class="quiz-option" data-index="0">exec — it buffers the output and returns it as a string</button>
+  <button class="quiz-option" data-index="1">fork — since ffmpeg is a long-running process with IPC</button>
+  <button class="quiz-option" data-index="2">spawn — it streams stdout so you don't buffer 2GB in memory</button>
+  <button class="quiz-option" data-index="3">execFile — it runs without a shell and handles large output</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">Why is <code>exec(`rm -rf ${userInput}`)</code> dangerous?</p>
+  <button class="quiz-option" data-index="0">exec is synchronous and blocks the event loop during deletion</button>
+  <button class="quiz-option" data-index="1">User input is executed in a shell — command injection vulnerability</button>
+  <button class="quiz-option" data-index="2">exec doesn't support the rm command on all operating systems</button>
+  <button class="quiz-option" data-index="3">The child process inherits root permissions automatically</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="nav-links">
+  <span>← (start of Processes topic)</span>
+  <a href="0002-worker-threads.html">Lesson 2: Worker Threads →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

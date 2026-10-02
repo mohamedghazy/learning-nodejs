@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Network Protocols 1: The Stack — What Lives Below HTTP</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Network Protocols — Lesson 01</p>
+<h1>The Protocol Stack</h1>
+<p class="subtitle">What lives below HTTP — and why a Node.js backend dev needs to care.</p>
+
+<!-- ============================================ -->
+<h2>You've Already Been Using This Stack</h2>
+
+<p>
+  Every <code>fetch('/api/users')</code> you've ever written travels through four layers before
+  it reaches your Node.js server. HTTP is just the top layer. Below it:
+</p>
+
+<table>
+  <thead>
+    <tr><th>Layer</th><th>Protocol</th><th>What it does</th><th>Your abstraction</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Application</strong></td>
+      <td>HTTP, WebSocket, DNS</td>
+      <td>Defines message format and semantics</td>
+      <td><code>fetch()</code>, <code>node:http</code></td>
+    </tr>
+    <tr>
+      <td><strong>Transport</strong></td>
+      <td>TCP, UDP</td>
+      <td>Delivers data between processes</td>
+      <td><code>node:net</code>, <code>node:dgram</code></td>
+    </tr>
+    <tr>
+      <td><strong>Internet</strong></td>
+      <td>IP (IPv4/IPv6)</td>
+      <td>Routes packets between machines</td>
+      <td>IP addresses in your server config</td>
+    </tr>
+    <tr>
+      <td><strong>Link</strong></td>
+      <td>Ethernet, Wi-Fi</td>
+      <td>Physically moves bits between devices</td>
+      <td>Your NIC — you never touch this</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <strong>The model used here is TCP/IP (not OSI).</strong> The OSI model has 7 layers and is more common in textbooks.
+  TCP/IP has 4 layers and is what the internet actually runs on.
+  <a href="https://www.cloudflare.com/learning/ddos/glossary/open-systems-interconnection-model-osi/" target="_blank">Cloudflare: OSI vs TCP/IP</a>
+</div>
+
+<!-- ============================================ -->
+<h2>Why HTTP Alone Isn't Enough</h2>
+
+<p>
+  HTTP is a protocol built <em>on top of</em> TCP. HTTP says "GET /users HTTP/1.1" — but
+  it has no idea how those bytes get from your browser to the server. That's TCP's job.
+</p>
+
+<p>
+  HTTP doesn't handle:
+</p>
+<ul>
+  <li>How to <strong>establish a connection</strong> between two machines</li>
+  <li>What to do when a <strong>packet is lost</strong> in transit</li>
+  <li>How to handle data arriving <strong>out of order</strong></li>
+  <li>How to <strong>avoid flooding</strong> a slow receiver</li>
+</ul>
+
+<p>TCP handles all of that. HTTP just rides on top.</p>
+
+<!-- ============================================ -->
+<h2>The Two Transport Protocols You Need to Know</h2>
+
+<h3>TCP — Transmission Control Protocol</h3>
+<p>
+  TCP is a <strong>connection-oriented, reliable, ordered</strong> protocol.
+  Before data can flow, both ends perform a <strong>handshake</strong>.
+  Every byte sent is acknowledged. Lost packets are retransmitted.
+  Data arrives in the exact order it was sent.
+</p>
+
+<p>
+  <strong>Used by:</strong> HTTP, HTTPS, WebSocket, SSH, FTP, SMTP, databases (Postgres, MySQL, MongoDB).
+  Basically: everything where data correctness matters.
+</p>
+
+<h3>UDP — User Datagram Protocol</h3>
+<p>
+  UDP is <strong>connectionless, unreliable, unordered</strong>.
+  You fire a packet and forget it. No handshake. No acknowledgement.
+  Packets can arrive out of order, be duplicated, or never arrive at all.
+</p>
+
+<p>
+  <strong>Used by:</strong> DNS queries, video streaming, online gaming, VoIP, WebRTC data channels.
+  Basically: everything where <em>speed</em> beats <em>correctness</em>, or where the application
+  handles its own reliability.
+</p>
+
+<div class="callout warning">
+  <strong>A common misconception:</strong> "UDP is unreliable" doesn't mean it's broken — it means
+  <em>the protocol itself</em> doesn't guarantee delivery. Your application can build reliability on
+  top (QUIC, which powers HTTP/3, does exactly this).
+</div>
+
+<!-- ============================================ -->
+<h2>TCP vs UDP at a Glance</h2>
+
+<table>
+  <thead>
+    <tr><th>Property</th><th>TCP</th><th>UDP</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Connection</td><td>Required (3-way handshake)</td><td>None (fire-and-forget)</td></tr>
+    <tr><td>Delivery guarantee</td><td>Yes — retransmits lost packets</td><td>No</td></tr>
+    <tr><td>Order guarantee</td><td>Yes — reorders out-of-sequence packets</td><td>No</td></tr>
+    <tr><td>Latency</td><td>Higher (handshake + ACKs)</td><td>Lower (no setup)</td></tr>
+    <tr><td>Throughput</td><td>Lower (flow/congestion control)</td><td>Higher (no overhead)</td></tr>
+    <tr><td>Use cases</td><td>HTTP, SSH, databases</td><td>DNS, video, gaming, VoIP</td></tr>
+    <tr><td>Node.js module</td><td><code>node:net</code></td><td><code>node:dgram</code></td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>The TCP Three-Way Handshake</h2>
+
+<p>
+  Before a single byte of HTTP data flows, TCP establishes a connection using three messages:
+</p>
+
+<pre><code><span class="comment">Client                Server</span>
+  |                     |
+  |------- SYN -------->|   "I want to connect. My sequence starts at X."
+  |                     |
+  |<------ SYN-ACK -----|   "OK. Yours starts at X+1. Mine starts at Y."
+  |                     |
+  |------- ACK -------->|   "Got it. Your sequence starts at Y+1."
+  |                     |
+  |===== data flows =====|</code></pre>
+
+<p>
+  This is why opening a TCP connection has latency. HTTPS adds another round trip for TLS.
+  HTTP/2 and HTTP/3 reduce this overhead, but the TCP handshake is always there (unless you're on QUIC/UDP).
+</p>
+
+<div class="callout">
+  <strong>SYN / ACK</strong> are TCP flags — bits in the TCP header that indicate the purpose of the segment.
+  SYN = synchronize (start connection). ACK = acknowledge (confirm receipt). FIN = finish (close connection).
+</div>
+
+<!-- ============================================ -->
+<h2>Where Node.js Fits In</h2>
+
+<p>
+  Node.js exposes the transport layer through two core modules:
+</p>
+
+<pre><code><span class="comment">// TCP — node:net</span>
+<span class="keyword">import</span> net <span class="keyword">from</span> <span class="string">'node:net'</span>;
+
+<span class="keyword">const</span> server = net.<span class="function">createServer</span>((socket) => {
+  socket.<span class="function">on</span>(<span class="string">'data'</span>, (chunk) => console.<span class="function">log</span>(chunk));
+  socket.<span class="function">write</span>(<span class="string">'hello\n'</span>);
+});
+server.<span class="function">listen</span>(<span class="number">8080</span>);
+
+<span class="comment">// UDP — node:dgram</span>
+<span class="keyword">import</span> dgram <span class="keyword">from</span> <span class="string">'node:dgram'</span>;
+
+<span class="keyword">const</span> socket = dgram.<span class="function">createSocket</span>(<span class="string">'udp4'</span>);
+socket.<span class="function">on</span>(<span class="string">'message'</span>, (msg, rinfo) => {
+  console.<span class="function">log</span>(`From <span class="string">${rinfo.address}:${rinfo.port}</span> — <span class="string">${msg}</span>`);
+});
+socket.<span class="function">bind</span>(<span class="number">41234</span>);</code></pre>
+
+<p>
+  <code>node:http</code> is built on top of <code>node:net</code> internally.
+  When you call <code>http.createServer()</code>, Node creates a TCP server under the hood.
+</p>
+
+<!-- ============================================ -->
+<h2>What Comes Next</h2>
+
+<p>Over the next lessons, we'll go deep on each:</p>
+<ul>
+  <li><a href="0002-tcp-deep-dive.html">Lesson 2 → TCP deep dive</a> — sockets, streams, the node:net API, building a raw TCP server</li>
+  <li><a href="0003-udp-dgram.html">Lesson 3 → UDP and node:dgram</a> — datagrams, broadcasting, real use cases</li>
+  <li><a href="0004-dns-and-lookup.html">Lesson 4 → DNS</a> — how names resolve to IPs, node:dns, caching pitfalls</li>
+  <li><a href="0005-tls-and-security.html">Lesson 5 → TLS</a> — encryption layer, certificates, HTTPS from scratch</li>
+</ul>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">HTTP is a protocol at which layer of the TCP/IP stack?</p>
+  <button class="quiz-option" data-index="0">Transport layer — it handles delivery between processes on a network</button>
+  <button class="quiz-option" data-index="1">Application layer — it defines message format and semantics for the app</button>
+  <button class="quiz-option" data-index="2">Internet layer — it routes packets between different machines globally</button>
+  <button class="quiz-option" data-index="3">Link layer — it physically moves bits between directly connected devices</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">Which scenario is a better fit for UDP than TCP?</p>
+  <button class="quiz-option" data-index="0">A REST API serving JSON to a React frontend over the browser</button>
+  <button class="quiz-option" data-index="1">An SSH session connecting to a remote production server securely</button>
+  <button class="quiz-option" data-index="2">A database connection from a Node.js app to a PostgreSQL server</button>
+  <button class="quiz-option" data-index="3">A live video stream where a dropped frame is better than a stall</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">How many messages does the TCP three-way handshake involve before data flows?</p>
+  <button class="quiz-option" data-index="0">Three — SYN, then SYN-ACK, then ACK from the original initiator</button>
+  <button class="quiz-option" data-index="1">Two — SYN from client and ACK from server is all that's needed</button>
+  <button class="quiz-option" data-index="2">Four — two SYNs and two ACKs to confirm both directions work</button>
+  <button class="quiz-option" data-index="3">One — the first request itself doubles as the connection request</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">In Node.js, <code>node:http</code> builds on top of which module internally?</p>
+  <button class="quiz-option" data-index="0">node:dgram — because HTTP uses datagram-style message framing</button>
+  <button class="quiz-option" data-index="1">node:tls — because every HTTP connection is encrypted by default</button>
+  <button class="quiz-option" data-index="2">node:net — because HTTP runs over a TCP socket connection</button>
+  <button class="quiz-option" data-index="3">node:dns — because HTTP requires hostname resolution to work</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<h2>Primary Source</h2>
+<p>
+  Read <a href="https://www.cloudflare.com/learning/network-layer/what-is-a-protocol/" target="_blank">Cloudflare: What is a network protocol?</a>
+  and then <a href="https://developer.mozilla.org/en-US/docs/Glossary/TCP" target="_blank">MDN: TCP</a>
+  — together they give you the vocabulary you need for the rest of this series.
+</p>
+
+<div class="followup">
+  <strong>Questions?</strong> Ask me about OSI vs TCP/IP differences, what QUIC is and why it matters,
+  how UDP became the base for HTTP/3, or anything else before moving on.
+</div>
+
+<div class="nav-links">
+  <span>← (start of Network Protocols topic)</span>
+  <a href="0002-tcp-deep-dive.html">Lesson 2: TCP Deep Dive →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+# Mission
+
+## Who
+Senior frontend developer (5 years experience: JavaScript, React, Next.js, TypeScript) transitioning to full-stack development.
+
+## Why
+To become a competent full-stack developer capable of building production-grade Node.js backends — understanding core modules, the HTTP protocol, frameworks (Express/Fastify), databases, authentication, and deployment.
+
+## Current Progress
+- ✅ **fs module** — 8 lessons complete. Senior-level understanding of file I/O, streams, security.
+- ✅ **HTTP protocol** — 7 lessons complete. Request/response, node:http server, routing, body parsing, JSON APIs, CORS, HTTPS/HTTP2.
+- ✅ **Events & Event Loop** — 7 lessons complete. EventEmitter, 6 phases, microtasks, blocking, Worker Threads, event-driven decoupling, setImmediate & scheduling.
+- ✅ **Child Processes & Workers** — 4 lessons complete. exec/spawn/fork, Worker Threads, Cluster, decision guide.
+- 🔄 **Network Protocols** — in progress. TCP, UDP/dgram, DNS, TLS. The transport and security layers beneath HTTP.
+- 🔄 **Express/Fastify** — in progress (1 lesson). Express fundamentals complete.
+- 🔄 **Backend Concepts** — in progress (2 lessons). Routing and middleware deep dives.
+- 🔄 **Databases** — in progress (1 lesson). SQL vs NoSQL, ACID & CAP fundamentals complete.
+- ⬜ **Authentication** — planned
+
+## Success Criteria
+- Can build production-grade Node.js APIs from scratch
+- Understands the full request/response cycle
+- Can make informed architectural decisions about file handling, routing, middleware, data persistence
+- Writes secure server-side code by default

@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Network Protocols 3: UDP and node:dgram — Fire and Forget</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Network Protocols — Lesson 03</p>
+<h1>UDP and <code>node:dgram</code></h1>
+<p class="subtitle">Fire-and-forget packets, broadcasting, and when UDP beats TCP.</p>
+
+<!-- ============================================ -->
+<h2>The Mental Model: Postal vs Telegram</h2>
+
+<p>
+  TCP is like registered mail — the post office confirms every package arrives, will redeliver if
+  lost, and guarantees they arrive in order. UDP is like dropping a message in a public mailbox —
+  it might arrive, might not, might arrive twice, and the post office never tells you what happened.
+</p>
+
+<p>
+  That sounds terrible. But that "overhead" of TCP (handshakes, ACKs, retransmits, ordering)
+  takes time — and for some applications, getting slightly stale or incomplete data <em>now</em>
+  is far more valuable than getting perfect data in 200ms.
+</p>
+
+<!-- ============================================ -->
+<h2>What UDP Guarantees (and What It Doesn't)</h2>
+
+<table>
+  <thead>
+    <tr><th>Property</th><th>TCP</th><th>UDP</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Delivery guarantee</td><td>Yes — lost packets are retransmitted</td><td>No — lost = gone</td></tr>
+    <tr><td>Order guarantee</td><td>Yes — sequence numbers ensure order</td><td>No — packets can arrive out of order</td></tr>
+    <tr><td>Duplicate prevention</td><td>Yes — deduplication is built in</td><td>No — same packet can arrive twice</td></tr>
+    <tr><td>Connection required</td><td>Yes — 3-way handshake first</td><td>No — send directly to any address</td></tr>
+    <tr><td>Message boundaries</td><td>No — TCP is a byte stream</td><td><strong>Yes</strong> — each datagram is discrete</td></tr>
+    <tr><td>Header overhead</td><td>20–60 bytes per segment</td><td>8 bytes per datagram</td></tr>
+    <tr><td>Latency</td><td>Higher</td><td>Lower</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <strong>UDP does preserve message boundaries.</strong> Unlike TCP, each UDP send is a self-contained
+  datagram. If you send 3 datagrams, the receiver gets 3 separate messages — never merged.
+  You still need to handle out-of-order or missing datagrams, but framing is not your problem.
+</div>
+
+<!-- ============================================ -->
+<h2>The UDP Header (8 bytes)</h2>
+
+<p>
+  Compared to TCP's 20–60 byte header, UDP's header is minimal:
+</p>
+
+<pre><code><span class="comment">Byte  0-1:  Source Port      (which port the sender used)</span>
+<span class="comment">Byte  2-3:  Destination Port (which port to deliver to)</span>
+<span class="comment">Byte  4-5:  Length           (header + data, in bytes)</span>
+<span class="comment">Byte  6-7:  Checksum         (error detection only, not correction)</span>
+<span class="comment">Byte  8+:   Data (the payload)</span></code></pre>
+
+<p>
+  The checksum detects corruption but can't fix it — a corrupted UDP datagram is just dropped.
+  (On IPv4, the checksum is technically optional; on IPv6 it's mandatory.)
+</p>
+
+<!-- ============================================ -->
+<h2>node:dgram — The UDP API</h2>
+
+<h3>UDP Server (Receiver)</h3>
+
+<pre><code><span class="keyword">import</span> dgram <span class="keyword">from</span> <span class="string">'node:dgram'</span>;
+
+<span class="keyword">const</span> server = dgram.<span class="function">createSocket</span>(<span class="string">'udp4'</span>);
+<span class="comment">// 'udp4' = IPv4, 'udp6' = IPv6</span>
+
+server.<span class="function">on</span>(<span class="string">'message'</span>, (msg, rinfo) => {
+  <span class="comment">// msg is a Buffer (not a string!)</span>
+  <span class="comment">// rinfo = { address, family, port, size }</span>
+  console.<span class="function">log</span>(`Got ${rinfo.size} bytes from ${rinfo.address}:${rinfo.port}`);
+  console.<span class="function">log</span>(<span class="string">'Message:'</span>, msg.<span class="function">toString</span>());
+
+  <span class="comment">// Send a reply (create a Buffer)</span>
+  <span class="keyword">const</span> reply = Buffer.<span class="function">from</span>(<span class="string">'ACK'</span>);
+  server.<span class="function">send</span>(reply, rinfo.port, rinfo.address);
+});
+
+server.<span class="function">on</span>(<span class="string">'error'</span>, (err) => {
+  console.<span class="function">error</span>(<span class="string">'Server error:'</span>, err);
+  server.<span class="function">close</span>();
+});
+
+server.<span class="function">on</span>(<span class="string">'listening'</span>, () => {
+  <span class="keyword">const</span> { address, port } = server.<span class="function">address</span>();
+  console.<span class="function">log</span>(`Listening on ${address}:${port}`);
+});
+
+server.<span class="function">bind</span>(<span class="number">41234</span>);</code></pre>
+
+<h3>UDP Client (Sender)</h3>
+
+<pre><code><span class="keyword">import</span> dgram <span class="keyword">from</span> <span class="string">'node:dgram'</span>;
+
+<span class="keyword">const</span> client = dgram.<span class="function">createSocket</span>(<span class="string">'udp4'</span>);
+
+<span class="keyword">const</span> message = Buffer.<span class="function">from</span>(<span class="string">'Hello, server!'</span>);
+
+<span class="comment">// send(msg, offset, length, port, address, callback)</span>
+client.<span class="function">send</span>(message, <span class="number">0</span>, message.length, <span class="number">41234</span>, <span class="string">'127.0.0.1'</span>, (err) => {
+  <span class="keyword">if</span> (err) console.<span class="function">error</span>(<span class="string">'Send failed:'</span>, err);
+  <span class="comment">// NOTE: No error here means the OS accepted the datagram.</span>
+  <span class="comment">// It does NOT mean the server received it!</span>
+  client.<span class="function">close</span>();  <span class="comment">// Close after sending (UDP is connectionless)</span>
+});</code></pre>
+
+<div class="callout warning">
+  <strong>The callback does not mean delivery.</strong> The callback fires when the OS has accepted
+  the datagram for sending. The datagram might still be lost in the network. There's no
+  confirmation that the server received it.
+</div>
+
+<!-- ============================================ -->
+<h2>Broadcasting and Multicasting</h2>
+
+<p>
+  One major advantage UDP has over TCP: you can send one datagram to <em>multiple recipients</em>
+  without multiple sends. TCP is always unicast (one-to-one).
+</p>
+
+<h3>Broadcast — "All devices on this subnet, listen up"</h3>
+
+<pre><code><span class="keyword">const</span> client = dgram.<span class="function">createSocket</span>(<span class="string">'udp4'</span>);
+
+<span class="comment">// Must enable broadcast explicitly</span>
+client.<span class="function">setBroadcast</span>(<span class="keyword">true</span>);
+
+<span class="keyword">const</span> msg = Buffer.<span class="function">from</span>(<span class="string">'Service announcement: I am online at port 8080'</span>);
+
+<span class="comment">// 255.255.255.255 = limited broadcast (all hosts on local network)</span>
+client.<span class="function">send</span>(msg, <span class="number">0</span>, msg.length, <span class="number">41234</span>, <span class="string">'255.255.255.255'</span>);</code></pre>
+
+<p>
+  <strong>Use case:</strong> Service discovery on a local network (e.g., a printer announcing itself,
+  mDNS/.local domain resolution, IoT device discovery).
+</p>
+
+<h3>Multicast — "Subscribers to this channel, listen up"</h3>
+
+<pre><code><span class="keyword">const</span> server = dgram.<span class="function">createSocket</span>(<span class="string">'udp4'</span>);
+server.<span class="function">bind</span>(<span class="number">41234</span>, () => {
+  <span class="comment">// Join a multicast group — 224.0.0.0/4 is reserved for multicast</span>
+  server.<span class="function">addMembership</span>(<span class="string">'224.1.1.1'</span>);
+});
+
+server.<span class="function">on</span>(<span class="string">'message'</span>, (msg) => {
+  console.<span class="function">log</span>(<span class="string">'Multicast message:'</span>, msg.<span class="function">toString</span>());
+});</code></pre>
+
+<p>
+  <strong>Use case:</strong> Live video streaming to multiple viewers, stock ticker feeds,
+  multiplayer game world state synchronization.
+</p>
+
+<!-- ============================================ -->
+<h2>Real-World UDP Use Cases</h2>
+
+<h3>DNS — The Most Common UDP You Use Every Day</h3>
+<p>
+  Every DNS query is a UDP datagram (usually). Your browser sends a 30-byte query to port 53
+  and expects a response within ~100ms. If it doesn't arrive, it retries — the <em>application</em>
+  handles reliability, not the protocol. Large DNS responses fall back to TCP.
+</p>
+
+<h3>Video Streaming (WebRTC, RTP)</h3>
+<p>
+  A video frame arrives 33ms late? Show it late or drop it. A TCP retransmit at the wrong moment
+  would freeze the entire video. UDP lets the application decide what to do with late/missing frames.
+</p>
+
+<h3>Online Gaming</h3>
+<p>
+  Your character's position 100ms ago is useless — you need the current position now.
+  Games use UDP with their own application-layer protocol for
+  <strong>delta compression</strong> (send only what changed) and
+  <strong>client-side prediction</strong> (interpolate between known positions).
+</p>
+
+<h3>QUIC (HTTP/3's Transport)</h3>
+<p>
+  QUIC is Google's protocol (now an IETF standard) that implements TCP-like reliability,
+  multiplexing, and TLS — all on top of UDP. Why? To avoid TCP's head-of-line blocking and
+  to make connection migration work (switching from Wi-Fi to LTE without dropping the connection).
+</p>
+
+<div class="callout">
+  <strong>HTTP/3 runs over QUIC, which runs over UDP.</strong>
+  The future of HTTP is UDP underneath, with reliability built in the application layer.
+  This gives fine-grained control over what to retransmit, rather than blocking all streams.
+</div>
+
+<!-- ============================================ -->
+<h2>Practical: UDP Log Aggregator</h2>
+
+<p>
+  A common production pattern: services emit log events over UDP to a central aggregator.
+  If the aggregator is temporarily down, log events are dropped — which is acceptable for
+  non-critical logs. This avoids the situation where a slow log sink causes your API to slow down.
+</p>
+
+<pre><code><span class="comment">// logger.js — in each service</span>
+<span class="keyword">import</span> dgram <span class="keyword">from</span> <span class="string">'node:dgram'</span>;
+
+<span class="keyword">const</span> sock = dgram.<span class="function">createSocket</span>(<span class="string">'udp4'</span>);
+
+<span class="keyword">export function</span> <span class="function">logEvent</span>(level, msg, meta = {}) {
+  <span class="keyword">const</span> payload = Buffer.<span class="function">from</span>(JSON.<span class="function">stringify</span>({
+    ts: Date.<span class="function">now</span>(),
+    level,
+    msg,
+    ...meta
+  }));
+  <span class="comment">// Fire-and-forget: if it fails, we don't care — it's just a log</span>
+  sock.<span class="function">send</span>(payload, <span class="number">9999</span>, <span class="string">'log-aggregator.internal'</span>);
+}
+
+<span class="comment">// aggregator.js — central log server</span>
+<span class="keyword">import</span> dgram <span class="keyword">from</span> <span class="string">'node:dgram'</span>;
+
+<span class="keyword">const</span> aggregator = dgram.<span class="function">createSocket</span>(<span class="string">'udp4'</span>);
+
+aggregator.<span class="function">on</span>(<span class="string">'message'</span>, (msg) => {
+  <span class="keyword">try</span> {
+    <span class="keyword">const</span> entry = JSON.<span class="function">parse</span>(msg.<span class="function">toString</span>());
+    <span class="comment">// Write to database, file, or forward to ELK/Datadog</span>
+    console.<span class="function">log</span>(entry);
+  } <span class="keyword">catch</span> {
+    <span class="comment">// Corrupted datagram — just drop it</span>
+  }
+});
+
+aggregator.<span class="function">bind</span>(<span class="number">9999</span>);</code></pre>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">Unlike TCP, UDP preserves which property that TCP does not?</p>
+  <button class="quiz-option" data-index="0">Delivery guarantee — every datagram is confirmed to arrive safely</button>
+  <button class="quiz-option" data-index="1">Ordering guarantee — datagrams always arrive in the order they were sent</button>
+  <button class="quiz-option" data-index="2">Message boundaries — each send is a discrete datagram, never merged</button>
+  <button class="quiz-option" data-index="3">Error correction — corrupted packets are fixed via the checksum field</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">The send callback fires in node:dgram. What does that confirm?</p>
+  <button class="quiz-option" data-index="0">The OS accepted the datagram for sending — not that the receiver got it</button>
+  <button class="quiz-option" data-index="1">The receiver successfully received and processed the datagram payload</button>
+  <button class="quiz-option" data-index="2">The datagram was acknowledged by the remote UDP socket's kernel layer</button>
+  <button class="quiz-option" data-index="3">The datagram was encrypted and passed the integrity check at both ends</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">Why does DNS use UDP rather than TCP for most queries?</p>
+  <button class="quiz-option" data-index="0">DNS messages contain binary data that TCP's text stream can't handle</button>
+  <button class="quiz-option" data-index="1">DNS servers use port 53 which is reserved for UDP by IANA specification</button>
+  <button class="quiz-option" data-index="2">TCP's reliability causes DNS responses to fail under high network load</button>
+  <button class="quiz-option" data-index="3">DNS queries are small and fast — a 30-byte UDP send beats TCP's handshake</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">What is QUIC, and why does it use UDP as its base?</p>
+  <button class="quiz-option" data-index="0">A DNS caching protocol — UDP gives it the low latency needed for local lookups</button>
+  <button class="quiz-option" data-index="1">HTTP/3's transport — builds reliability on UDP to avoid TCP's head-of-line blocking</button>
+  <button class="quiz-option" data-index="2">A UDP multicast protocol — lets HTTP/3 broadcast to multiple clients at once</button>
+  <button class="quiz-option" data-index="3">A compression scheme — uses UDP because TCP overhead makes compression slower</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<h2>Primary Source</h2>
+<p>
+  Read the Node.js docs: <a href="https://nodejs.org/api/dgram.html" target="_blank">node:dgram API reference</a>.
+  For QUIC/UDP's role in modern networking: <a href="https://www.cloudflare.com/learning/performance/what-is-http3/" target="_blank">Cloudflare: What is HTTP/3?</a>
+</p>
+
+<div class="followup">
+  <strong>Questions?</strong> Ask me about UDP hole-punching (how WebRTC peer-to-peer works),
+  datagram size limits (MTU, fragmentation), UDP in games in depth, or how to build
+  your own reliable protocol on top of UDP.
+</div>
+
+<div class="nav-links">
+  <a href="0002-tcp-deep-dive.html">← Lesson 2: TCP Deep Dive</a>
+  <a href="0004-dns-and-lookup.html">Lesson 4: DNS and node:dns →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

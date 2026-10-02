@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reference: HTTP Protocol & Node.js HTTP Module Cheat Sheet</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+</head>
+<body>
+
+<h1>HTTP Protocol & Node.js — Quick Reference</h1>
+<p class="subtitle">Status codes, headers, server patterns, CORS — all at a glance.</p>
+
+<h2>Basic Server</h2>
+<pre><code><span class="keyword">import</span> http <span class="keyword">from</span> <span class="string">'node:http'</span>;
+http.<span class="function">createServer</span>((req, res) => {
+  res.writeHead(<span class="number">200</span>, { <span class="string">'Content-Type'</span>: <span class="string">'application/json'</span> });
+  res.end(JSON.stringify({ ok: <span class="keyword">true</span> }));
+}).listen(<span class="number">3000</span>);</code></pre>
+
+<h2>Request Object (<code>req</code>)</h2>
+<table>
+  <tr><td><code>req.method</code></td><td><code>'GET'</code>, <code>'POST'</code>, etc.</td></tr>
+  <tr><td><code>req.url</code></td><td><code>'/users?page=2'</code> (path + query)</td></tr>
+  <tr><td><code>req.headers</code></td><td>Object (all keys lowercase)</td></tr>
+  <tr><td><code>req</code> itself</td><td>Readable stream (body in chunks)</td></tr>
+</table>
+
+<h2>Response Object (<code>res</code>)</h2>
+<table>
+  <tr><td><code>res.statusCode = 201</code></td><td>Set status code</td></tr>
+  <tr><td><code>res.setHeader(name, value)</code></td><td>Set individual header</td></tr>
+  <tr><td><code>res.writeHead(status, headers)</code></td><td>Set status + headers at once</td></tr>
+  <tr><td><code>res.write(chunk)</code></td><td>Write body chunk</td></tr>
+  <tr><td><code>res.end(data?)</code></td><td>Send final chunk and close</td></tr>
+</table>
+
+<h2>Status Codes</h2>
+<table>
+  <thead><tr><th>Code</th><th>Meaning</th><th>Use</th></tr></thead>
+  <tbody>
+    <tr><td>200</td><td>OK</td><td>GET success</td></tr>
+    <tr><td>201</td><td>Created</td><td>POST success</td></tr>
+    <tr><td>204</td><td>No Content</td><td>DELETE success</td></tr>
+    <tr><td>301</td><td>Moved Permanently</td><td>URL changed</td></tr>
+    <tr><td>304</td><td>Not Modified</td><td>Cache valid</td></tr>
+    <tr><td>400</td><td>Bad Request</td><td>Invalid input</td></tr>
+    <tr><td>401</td><td>Unauthorized</td><td>No/invalid auth</td></tr>
+    <tr><td>403</td><td>Forbidden</td><td>Authenticated but no permission</td></tr>
+    <tr><td>404</td><td>Not Found</td><td>Resource doesn't exist</td></tr>
+    <tr><td>409</td><td>Conflict</td><td>Duplicate resource</td></tr>
+    <tr><td>415</td><td>Unsupported Media Type</td><td>Wrong Content-Type</td></tr>
+    <tr><td>422</td><td>Unprocessable Entity</td><td>Validation failed</td></tr>
+    <tr><td>429</td><td>Too Many Requests</td><td>Rate limited</td></tr>
+    <tr><td>500</td><td>Internal Server Error</td><td>Bug in your code</td></tr>
+    <tr><td>502</td><td>Bad Gateway</td><td>Upstream unavailable</td></tr>
+    <tr><td>503</td><td>Service Unavailable</td><td>Overloaded/maintenance</td></tr>
+  </tbody>
+</table>
+
+<h2>HTTP Methods</h2>
+<table>
+  <thead><tr><th>Method</th><th>Body?</th><th>Idempotent?</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td>GET</td><td>No</td><td>Yes</td><td>Read</td></tr>
+    <tr><td>POST</td><td>Yes</td><td>No</td><td>Create</td></tr>
+    <tr><td>PUT</td><td>Yes</td><td>Yes</td><td>Replace</td></tr>
+    <tr><td>PATCH</td><td>Yes</td><td>No</td><td>Partial update</td></tr>
+    <tr><td>DELETE</td><td>Rarely</td><td>Yes</td><td>Remove</td></tr>
+    <tr><td>OPTIONS</td><td>No</td><td>Yes</td><td>CORS preflight</td></tr>
+  </tbody>
+</table>
+
+<h2>URL Parsing</h2>
+<pre><code><span class="keyword">const</span> url = <span class="keyword">new</span> URL(req.url, <span class="string">`http://${req.headers.host}`</span>);
+url.pathname;                    <span class="comment">// '/users'</span>
+url.searchParams.get(<span class="string">'page'</span>);    <span class="comment">// '2' (string!)</span></code></pre>
+
+<h2>Read JSON Body</h2>
+<pre><code><span class="keyword">const</span> chunks = [];
+<span class="keyword">for await</span> (<span class="keyword">const</span> chunk <span class="keyword">of</span> req) chunks.push(chunk);
+<span class="keyword">const</span> body = JSON.parse(Buffer.concat(chunks).toString());</code></pre>
+
+<h2>CORS Headers</h2>
+<pre><code>res.setHeader(<span class="string">'Access-Control-Allow-Origin'</span>, <span class="string">'https://myapp.com'</span>);
+res.setHeader(<span class="string">'Access-Control-Allow-Methods'</span>, <span class="string">'GET,POST,PUT,DELETE'</span>);
+res.setHeader(<span class="string">'Access-Control-Allow-Headers'</span>, <span class="string">'Content-Type,Authorization'</span>);
+<span class="comment">// Handle OPTIONS preflight: respond 204, no body</span></code></pre>
+
+<h2>Production HTTPS</h2>
+<pre><code><span class="comment">// In production: use reverse proxy (Nginx/Caddy) for TLS</span>
+<span class="comment">// Your Node app runs plain HTTP on internal port</span>
+<span class="comment">// Proxy handles certs, HTTP/2, and forwards to Node</span></code></pre>
+
+</body>
+</html>

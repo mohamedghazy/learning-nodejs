@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HTTP Lesson 6: CORS — What It Really Is and How to Handle It</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">HTTP — Lesson 06</p>
+<h1>CORS — Cross-Origin Resource Sharing</h1>
+<p class="subtitle">The error you've fought as a frontend dev. Now you'll fix it from the server side.</p>
+
+<!-- ============================================ -->
+<h2>What CORS Actually Is</h2>
+
+<p>
+  CORS is a <strong>browser security mechanism</strong> (not a server thing, not a Node thing).
+  The browser blocks frontend JavaScript from reading responses from a different origin
+  unless the server explicitly allows it via headers.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Your frontend</th><th>API server</th><th>Same origin?</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>http://localhost:3000</code></td><td><code>http://localhost:3000/api</code></td><td>✅ Yes (same port)</td></tr>
+    <tr><td><code>http://localhost:3000</code></td><td><code>http://localhost:4000/api</code></td><td>❌ No (different port)</td></tr>
+    <tr><td><code>https://myapp.com</code></td><td><code>https://api.myapp.com</code></td><td>❌ No (different subdomain)</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Origin</strong> = protocol + host + port. Any difference = cross-origin = CORS applies.</p>
+
+<!-- ============================================ -->
+<h2>The Preflight Request (OPTIONS)</h2>
+
+<p>
+  For "non-simple" requests (POST with JSON, custom headers, PUT, DELETE), the browser
+  sends an <code>OPTIONS</code> request first asking "is this allowed?". Your server must respond
+  with the right headers:
+</p>
+
+<pre><code><span class="comment">// Browser sends:  OPTIONS /api/users</span>
+<span class="comment">// Server must respond with CORS headers + 204 (no body)</span>
+
+<span class="keyword">if</span> (req.method === <span class="string">'OPTIONS'</span>) {
+  res.writeHead(<span class="number">204</span>, {
+    <span class="string">'Access-Control-Allow-Origin'</span>: <span class="string">'http://localhost:3000'</span>,
+    <span class="string">'Access-Control-Allow-Methods'</span>: <span class="string">'GET, POST, PUT, DELETE, PATCH'</span>,
+    <span class="string">'Access-Control-Allow-Headers'</span>: <span class="string">'Content-Type, Authorization'</span>,
+    <span class="string">'Access-Control-Max-Age'</span>: <span class="string">'86400'</span>, <span class="comment">// cache preflight for 24h</span>
+  });
+  res.end();
+  <span class="keyword">return</span>;
+}</code></pre>
+
+<!-- ============================================ -->
+<h2>The CORS Headers</h2>
+
+<table>
+  <thead>
+    <tr><th>Header</th><th>Purpose</th><th>Example</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>Access-Control-Allow-Origin</code></td><td>Which origins can read the response</td><td><code>https://myapp.com</code> or <code>*</code></td></tr>
+    <tr><td><code>Access-Control-Allow-Methods</code></td><td>Which HTTP methods are allowed</td><td><code>GET, POST, PUT, DELETE</code></td></tr>
+    <tr><td><code>Access-Control-Allow-Headers</code></td><td>Which request headers are allowed</td><td><code>Content-Type, Authorization</code></td></tr>
+    <tr><td><code>Access-Control-Allow-Credentials</code></td><td>Allow cookies/auth headers</td><td><code>true</code></td></tr>
+    <tr><td><code>Access-Control-Max-Age</code></td><td>How long to cache the preflight</td><td><code>86400</code> (seconds)</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>A Complete CORS Handler</h2>
+
+<pre><code><span class="keyword">function</span> <span class="function">setCORSHeaders</span>(req, res) {
+  <span class="keyword">const</span> allowedOrigins = [
+    <span class="string">'http://localhost:3000'</span>,
+    <span class="string">'https://myapp.com'</span>,
+  ];
+  <span class="keyword">const</span> origin = req.headers.origin;
+
+  <span class="keyword">if</span> (allowedOrigins.includes(origin)) {
+    res.setHeader(<span class="string">'Access-Control-Allow-Origin'</span>, origin);
+  }
+
+  res.setHeader(<span class="string">'Access-Control-Allow-Methods'</span>, <span class="string">'GET,POST,PUT,DELETE,PATCH'</span>);
+  res.setHeader(<span class="string">'Access-Control-Allow-Headers'</span>, <span class="string">'Content-Type,Authorization'</span>);
+  res.setHeader(<span class="string">'Access-Control-Allow-Credentials'</span>, <span class="string">'true'</span>);
+}
+
+http.<span class="function">createServer</span>((req, res) => {
+  <span class="function">setCORSHeaders</span>(req, res);
+
+  <span class="comment">// Handle preflight</span>
+  <span class="keyword">if</span> (req.method === <span class="string">'OPTIONS'</span>) {
+    res.writeHead(<span class="number">204</span>);
+    res.end();
+    <span class="keyword">return</span>;
+  }
+
+  <span class="comment">// ... normal request handling ...</span>
+}).listen(<span class="number">4000</span>);</code></pre>
+
+<div class="callout warning">
+  <strong>Never use <code>*</code> with <code>credentials: true</code>.</strong> If you set
+  <code>Allow-Credentials: true</code>, you MUST specify the exact origin — <code>*</code> is rejected by browsers.
+  This is because allowing credentials from anywhere would be a massive security hole.
+</div>
+
+<!-- ============================================ -->
+<h2>When CORS Doesn't Apply</h2>
+
+<ul>
+  <li><strong>Server-to-server requests</strong> — no browser, no CORS. Your Node backend calling another API? No CORS.</li>
+  <li><strong>Same origin</strong> — frontend and API on same origin. Next.js API routes are same-origin by default.</li>
+  <li><strong>Simple requests</strong> — GET with no custom headers skips preflight (but still needs Allow-Origin header for reading response).</li>
+</ul>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">Your React app at <code>localhost:3000</code> calls your API at <code>localhost:4000</code>. The browser blocks the response. Why?</p>
+  <button class="quiz-option" data-index="0">The server rejected the request because the port number is wrong</button>
+  <button class="quiz-option" data-index="1">Node.js doesn't allow cross-port HTTP connections by default</button>
+  <button class="quiz-option" data-index="2">Different ports = different origins, so the browser enforces CORS policy</button>
+  <button class="quiz-option" data-index="3">The request was blocked at the network level by the operating system</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">A browser sends an <code>OPTIONS</code> request before your actual <code>POST</code>. What is this called?</p>
+  <button class="quiz-option" data-index="0">A preflight request — the browser checks if the cross-origin POST is allowed</button>
+  <button class="quiz-option" data-index="1">A handshake request — establishing a persistent connection for the POST</button>
+  <button class="quiz-option" data-index="2">A discovery request — the browser queries what methods the server supports</button>
+  <button class="quiz-option" data-index="3">A validation request — confirming the POST body format before sending</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="nav-links">
+  <a href="0005-json-api-patterns.html">← Lesson 5: JSON API Patterns</a>
+  <a href="0007-https-and-http2.html">Lesson 7: HTTPS & HTTP/2 →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

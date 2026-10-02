@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Events Lesson 3: Practical Event Patterns for Production</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Events — Lesson 03</p>
+<h1>Practical Event Patterns</h1>
+<p class="subtitle">Memory leaks, typed events, async listeners, and the patterns you'll use in production services.</p>
+
+<!-- ============================================ -->
+<h2>Memory Leak: The MaxListeners Warning</h2>
+
+<p>
+  By default, Node warns if you register more than <strong>10 listeners</strong> for a single event.
+  This usually means you're adding listeners in a loop without cleaning up:
+</p>
+
+<pre><code><span class="comment">// ❌ Memory leak: adds a new listener on every request</span>
+server.<span class="function">on</span>(<span class="string">'request'</span>, (req, res) => {
+  db.<span class="function">on</span>(<span class="string">'ready'</span>, () => { <span class="comment">/* ... */</span> }); <span class="comment">// NEW listener every request!</span>
+});
+
+<span class="comment">// ✅ Fix: use once() or register outside the loop</span>
+server.<span class="function">on</span>(<span class="string">'request'</span>, (req, res) => {
+  db.<span class="function">once</span>(<span class="string">'ready'</span>, () => { <span class="comment">/* auto-removed */</span> });
+});</code></pre>
+
+<p>
+  If you genuinely need more than 10 listeners, increase the limit explicitly:
+</p>
+
+<pre><code>emitter.<span class="function">setMaxListeners</span>(<span class="number">50</span>); <span class="comment">// I know what I'm doing</span>
+<span class="comment">// or 0 for unlimited (be careful)</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Pattern: Event-Driven Decoupling</h2>
+
+<p>
+  Instead of one module directly calling another, emit an event. Other modules subscribe:
+</p>
+
+<pre><code><span class="comment">// app-events.js — shared event bus</span>
+<span class="keyword">import</span> { EventEmitter } <span class="keyword">from</span> <span class="string">'node:events'</span>;
+<span class="keyword">export const</span> appEvents = <span class="keyword">new</span> <span class="function">EventEmitter</span>();
+
+<span class="comment">// auth-service.js</span>
+<span class="keyword">import</span> { appEvents } <span class="keyword">from</span> <span class="string">'./app-events.js'</span>;
+<span class="keyword">export function</span> <span class="function">login</span>(user) {
+  <span class="comment">// ... authenticate ...</span>
+  appEvents.<span class="function">emit</span>(<span class="string">'user:login'</span>, { userId: user.id, time: Date.now() });
+}
+
+<span class="comment">// analytics.js — listens, doesn't know about auth</span>
+<span class="keyword">import</span> { appEvents } <span class="keyword">from</span> <span class="string">'./app-events.js'</span>;
+appEvents.<span class="function">on</span>(<span class="string">'user:login'</span>, ({ userId, time }) => {
+  console.log(<span class="string">`Analytics: user ${userId} logged in at ${time}`</span>);
+});
+
+<span class="comment">// audit-log.js — also listens, also doesn't know about auth</span>
+<span class="keyword">import</span> { appEvents } <span class="keyword">from</span> <span class="string">'./app-events.js'</span>;
+appEvents.<span class="function">on</span>(<span class="string">'user:login'</span>, ({ userId }) => {
+  console.log(<span class="string">`Audit: login event for ${userId}`</span>);
+});</code></pre>
+
+<!-- ============================================ -->
+<h2>Pattern: Async Event Listeners</h2>
+
+<p>
+  <code>emit()</code> doesn't <code>await</code> async listeners. If your listener is async, errors won't
+  propagate unless you handle them:
+</p>
+
+<pre><code><span class="comment">// ❌ Error disappears (unhandled rejection)</span>
+emitter.<span class="function">on</span>(<span class="string">'order:created'</span>, <span class="keyword">async</span> (order) => {
+  <span class="keyword">await</span> <span class="function">sendEmail</span>(order); <span class="comment">// if this throws, nobody catches it</span>
+});
+
+<span class="comment">// ✅ Wrap async listeners with error handling</span>
+emitter.<span class="function">on</span>(<span class="string">'order:created'</span>, <span class="keyword">async</span> (order) => {
+  <span class="keyword">try</span> {
+    <span class="keyword">await</span> <span class="function">sendEmail</span>(order);
+  } <span class="keyword">catch</span> (err) {
+    console.error(<span class="string">'Email failed:'</span>, err.message);
+    <span class="comment">// Optionally: emitter.emit('error', err)</span>
+  }
+});</code></pre>
+
+<!-- ============================================ -->
+<h2>Pattern: AbortSignal + EventEmitter</h2>
+
+<p>Cancel listeners when an operation is aborted:</p>
+
+<pre><code><span class="keyword">import</span> { once } <span class="keyword">from</span> <span class="string">'node:events'</span>;
+
+<span class="keyword">const</span> controller = <span class="keyword">new</span> AbortController();
+
+<span class="keyword">try</span> {
+  <span class="keyword">const</span> [data] = <span class="keyword">await</span> <span class="function">once</span>(emitter, <span class="string">'data'</span>, { signal: controller.signal });
+  console.log(<span class="string">'Got data:'</span>, data);
+} <span class="keyword">catch</span> (err) {
+  <span class="keyword">if</span> (err.code === <span class="string">'ABORT_ERR'</span>) {
+    console.log(<span class="string">'Cancelled waiting for event'</span>);
+  }
+}
+
+<span class="comment">// Later: controller.abort() to stop waiting</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Pattern: Typed Events (TypeScript)</h2>
+
+<p>In TypeScript projects, type your events for safety:</p>
+
+<pre><code><span class="keyword">import</span> { EventEmitter } <span class="keyword">from</span> <span class="string">'node:events'</span>;
+
+<span class="keyword">interface</span> OrderEvents {
+  <span class="string">'order:created'</span>: [order: { id: string; total: number }];
+  <span class="string">'order:cancelled'</span>: [orderId: string];
+  <span class="string">'error'</span>: [error: Error];
+}
+
+<span class="keyword">class</span> <span class="function">OrderService</span> <span class="keyword">extends</span> (EventEmitter <span class="keyword">as</span> {
+  <span class="keyword">new</span>(): TypedEmitter&lt;OrderEvents&gt;
+}) {
+  <span class="comment">// Now emit() and on() are type-safe</span>
+}</code></pre>
+
+<!-- ============================================ -->
+<h2>When NOT to Use EventEmitter</h2>
+
+<ul>
+  <li><strong>Simple function calls</strong> — if there's only one subscriber, just call the function directly</li>
+  <li><strong>Request/response patterns</strong> — events are fire-and-forget; if you need a return value, use async functions</li>
+  <li><strong>Cross-service communication</strong> — use a message queue (Redis, RabbitMQ) instead of in-process events</li>
+</ul>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">You see the warning "MaxListenersExceededWarning: Possible memory leak detected." What's the most likely cause?</p>
+  <button class="quiz-option" data-index="0">Too many event types are registered on a single EventEmitter instance</button>
+  <button class="quiz-option" data-index="1">The EventEmitter is storing too much data in its internal buffer</button>
+  <button class="quiz-option" data-index="2">Listeners are being added repeatedly (e.g., inside a loop) without removal</button>
+  <button class="quiz-option" data-index="3">The event loop is overloaded and can't process events fast enough</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">An async listener throws an error. What happens by default?</p>
+  <button class="quiz-option" data-index="0">It becomes an unhandled promise rejection — it doesn't propagate to emit()</button>
+  <button class="quiz-option" data-index="1">emit() rejects and the caller can catch it with try/catch</button>
+  <button class="quiz-option" data-index="2">The error is automatically emitted as an 'error' event on the same emitter</button>
+  <button class="quiz-option" data-index="3">Node.js retries the listener three times before giving up</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="nav-links">
+  <a href="0002-event-loop-phases.html">← Lesson 2: Event Loop Phases</a>
+  <a href="0004-blocking-and-performance.html">Lesson 4: Blocking & Performance →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

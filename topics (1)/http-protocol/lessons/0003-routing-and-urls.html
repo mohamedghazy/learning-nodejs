@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HTTP Lesson 3: Routing, URL Parsing & Query Parameters</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">HTTP — Lesson 03</p>
+<h1>Routing, URL Parsing & Query Parameters</h1>
+<p class="subtitle">Deciding what to do based on the method and URL — the foundation every framework builds on.</p>
+
+<!-- ============================================ -->
+<h2>What Is Routing?</h2>
+
+<p>
+  Routing = matching a request's <strong>method + URL</strong> to the right handler function.
+  Frameworks like Express automate this, but understanding the raw pattern helps you
+  debug and build APIs correctly.
+</p>
+
+<pre><code><span class="comment">// The core idea: method + path → handler</span>
+<span class="keyword">if</span> (req.method === <span class="string">'GET'</span> && req.url === <span class="string">'/users'</span>) { <span class="comment">/* list users */</span> }
+<span class="keyword">if</span> (req.method === <span class="string">'POST'</span> && req.url === <span class="string">'/users'</span>) { <span class="comment">/* create user */</span> }
+<span class="keyword">if</span> (req.method === <span class="string">'GET'</span> && req.url === <span class="string">'/health'</span>) { <span class="comment">/* health check */</span> }</code></pre>
+
+<!-- ============================================ -->
+<h2>Parsing URLs With <code>new URL()</code></h2>
+
+<p>
+  <code>req.url</code> is a raw string like <code>/users?page=2&limit=10</code>. The built-in
+  <code>URL</code> class (same API as in the browser) parses it:
+</p>
+
+<pre><code><span class="keyword">import</span> http <span class="keyword">from</span> <span class="string">'node:http'</span>;
+
+http.<span class="function">createServer</span>((req, res) => {
+  <span class="comment">// URL needs a base — use the request host</span>
+  <span class="keyword">const</span> url = <span class="keyword">new</span> URL(req.url, <span class="string">`http://${req.headers.host}`</span>);
+
+  console.log(url.pathname);            <span class="comment">// '/users'</span>
+  console.log(url.searchParams.get(<span class="string">'page'</span>));  <span class="comment">// '2'</span>
+  console.log(url.searchParams.get(<span class="string">'limit'</span>)); <span class="comment">// '10'</span>
+
+  res.end(<span class="string">'ok'</span>);
+}).listen(<span class="number">3000</span>);</code></pre>
+
+<table>
+  <thead>
+    <tr><th>Property</th><th>Example for <code>/users?page=2&limit=10</code></th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>url.pathname</code></td><td><code>/users</code></td></tr>
+    <tr><td><code>url.searchParams</code></td><td>URLSearchParams object</td></tr>
+    <tr><td><code>url.searchParams.get('page')</code></td><td><code>'2'</code> (always a string)</td></tr>
+    <tr><td><code>url.searchParams.has('limit')</code></td><td><code>true</code></td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>Dynamic Route Parameters</h2>
+
+<p>
+  For URLs like <code>/users/42</code> or <code>/posts/hello-world</code>, you need to extract the
+  dynamic segment. Without a framework, you split the pathname:
+</p>
+
+<pre><code><span class="keyword">const</span> url = <span class="keyword">new</span> URL(req.url, <span class="string">`http://${req.headers.host}`</span>);
+<span class="keyword">const</span> parts = url.pathname.split(<span class="string">'/'</span>).filter(Boolean);
+<span class="comment">// '/users/42' → ['users', '42']</span>
+
+<span class="keyword">if</span> (req.method === <span class="string">'GET'</span> && parts[<span class="number">0</span>] === <span class="string">'users'</span> && parts[<span class="number">1</span>]) {
+  <span class="keyword">const</span> userId = parts[<span class="number">1</span>]; <span class="comment">// '42'</span>
+  <span class="comment">// fetch user by ID...</span>
+}</code></pre>
+
+<!-- ============================================ -->
+<h2>A Complete Router Pattern</h2>
+
+<pre><code><span class="keyword">import</span> http <span class="keyword">from</span> <span class="string">'node:http'</span>;
+
+http.<span class="function">createServer</span>(<span class="keyword">async</span> (req, res) => {
+  <span class="keyword">const</span> url = <span class="keyword">new</span> URL(req.url, <span class="string">`http://${req.headers.host}`</span>);
+  <span class="keyword">const</span> { pathname } = url;
+  <span class="keyword">const</span> { method } = req;
+
+  <span class="comment">// JSON response helper</span>
+  <span class="keyword">const</span> <span class="function">json</span> = (data, status = <span class="number">200</span>) => {
+    res.writeHead(status, { <span class="string">'Content-Type'</span>: <span class="string">'application/json'</span> });
+    res.end(JSON.stringify(data));
+  };
+
+  <span class="comment">// Routes</span>
+  <span class="keyword">if</span> (method === <span class="string">'GET'</span> && pathname === <span class="string">'/health'</span>) {
+    <span class="function">json</span>({ status: <span class="string">'ok'</span>, uptime: process.uptime() });
+  }
+  <span class="keyword">else if</span> (method === <span class="string">'GET'</span> && pathname === <span class="string">'/users'</span>) {
+    <span class="keyword">const</span> page = Number(url.searchParams.get(<span class="string">'page'</span>)) || <span class="number">1</span>;
+    <span class="function">json</span>({ users: [], page });
+  }
+  <span class="keyword">else if</span> (method === <span class="string">'GET'</span> && pathname.startsWith(<span class="string">'/users/'</span>)) {
+    <span class="keyword">const</span> id = pathname.split(<span class="string">'/'</span>)[<span class="number">2</span>];
+    <span class="function">json</span>({ id, name: <span class="string">`User ${id}`</span> });
+  }
+  <span class="keyword">else</span> {
+    <span class="function">json</span>({ error: <span class="string">'Not Found'</span> }, <span class="number">404</span>);
+  }
+}).listen(<span class="number">3000</span>, () => console.log(<span class="string">'http://localhost:3000'</span>));</code></pre>
+
+<div class="callout">
+  <strong>This is what Express does under the hood.</strong> Express adds pattern matching
+  (<code>/users/:id</code>), middleware chains, and cleaner API — but it's the same
+  method + pathname matching at the core.
+</div>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">For the URL <code>/products?category=shoes&sort=price</code>, what does <code>new URL(reqUrl, base).pathname</code> return?</p>
+  <button class="quiz-option" data-index="0">/products</button>
+  <button class="quiz-option" data-index="1">/products?category=shoes&sort=price</button>
+  <button class="quiz-option" data-index="2">products</button>
+  <button class="quiz-option" data-index="3">/products/shoes/price</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question"><code>url.searchParams.get('page')</code> returns <code>'2'</code>. What type is this value?</p>
+  <button class="quiz-option" data-index="0">Number — query params are auto-parsed as integers</button>
+  <button class="quiz-option" data-index="1">undefined — you need to use getAll() instead</button>
+  <button class="quiz-option" data-index="2">Object — each param is a key-value object</button>
+  <button class="quiz-option" data-index="3">String — all query params are strings, you must convert manually</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="nav-links">
+  <a href="0002-node-http-server.html">← Lesson 2: Building a Server</a>
+  <a href="0004-request-body-parsing.html">Lesson 4: Request Body Parsing →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

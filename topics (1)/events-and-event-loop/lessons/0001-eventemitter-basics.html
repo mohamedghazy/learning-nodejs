@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Events Lesson 1: EventEmitter — The Backbone of Node.js</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Events — Lesson 01</p>
+<h1>EventEmitter — The Backbone of Node.js</h1>
+<p class="subtitle">The publish-subscribe pattern that powers streams, HTTP servers, and everything in between.</p>
+
+<!-- ============================================ -->
+<h2>You Already Use EventEmitter</h2>
+
+<p>Every major Node.js API is built on <code>EventEmitter</code>:</p>
+<ul>
+  <li><strong>Streams</strong> — <code>'data'</code>, <code>'end'</code>, <code>'error'</code> events (your fs lessons)</li>
+  <li><strong>HTTP server</strong> — <code>'request'</code>, <code>'connection'</code>, <code>'close'</code> events</li>
+  <li><strong>Child processes</strong> — <code>'exit'</code>, <code>'message'</code> events</li>
+  <li><strong>fs.watch</strong> — <code>'change'</code>, <code>'rename'</code> events</li>
+</ul>
+
+<p>
+  In the browser, you have <code>element.addEventListener('click', handler)</code>.
+  In Node.js, you have <code>emitter.on('event', handler)</code>. Same concept, different API.
+</p>
+
+<!-- ============================================ -->
+<h2>The Core API</h2>
+
+<pre><code><span class="keyword">import</span> { EventEmitter } <span class="keyword">from</span> <span class="string">'node:events'</span>;
+
+<span class="keyword">const</span> emitter = <span class="keyword">new</span> <span class="function">EventEmitter</span>();
+
+<span class="comment">// Subscribe (listen for an event)</span>
+emitter.<span class="function">on</span>(<span class="string">'greet'</span>, (name) => {
+  console.log(<span class="string">`Hello, ${name}!`</span>);
+});
+
+<span class="comment">// Publish (emit an event)</span>
+emitter.<span class="function">emit</span>(<span class="string">'greet'</span>, <span class="string">'Mohamed'</span>);
+<span class="comment">// → "Hello, Mohamed!"</span></code></pre>
+
+<h3>Key Methods</h3>
+<table>
+  <thead>
+    <tr><th>Method</th><th>Purpose</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>emitter.on(event, listener)</code></td><td>Add a listener (persists)</td></tr>
+    <tr><td><code>emitter.once(event, listener)</code></td><td>Add a one-time listener (auto-removes after first call)</td></tr>
+    <tr><td><code>emitter.emit(event, ...args)</code></td><td>Trigger all listeners for that event</td></tr>
+    <tr><td><code>emitter.off(event, listener)</code></td><td>Remove a specific listener</td></tr>
+    <tr><td><code>emitter.removeAllListeners(event?)</code></td><td>Remove all listeners (optionally for one event)</td></tr>
+    <tr><td><code>emitter.listenerCount(event)</code></td><td>How many listeners are registered</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>Critical Fact: Listeners Run Synchronously</h2>
+
+<p>
+  When you call <code>emit()</code>, all registered listeners are called <strong>synchronously</strong>,
+  in the order they were registered. <code>emit()</code> blocks until every listener returns.
+</p>
+
+<pre><code>emitter.<span class="function">on</span>(<span class="string">'data'</span>, () => console.log(<span class="string">'first'</span>));
+emitter.<span class="function">on</span>(<span class="string">'data'</span>, () => console.log(<span class="string">'second'</span>));
+
+console.log(<span class="string">'before'</span>);
+emitter.<span class="function">emit</span>(<span class="string">'data'</span>);
+console.log(<span class="string">'after'</span>);
+
+<span class="comment">// Output: before → first → second → after</span>
+<span class="comment">// NOT: before → after → first → second</span></code></pre>
+
+<div class="callout warning">
+  <strong>This means:</strong> A slow listener blocks <code>emit()</code>. If your listener does heavy
+  computation, it blocks the event loop. Use <code>setImmediate()</code> or <code>process.nextTick()</code>
+  inside the listener if you need to defer work.
+</div>
+
+<!-- ============================================ -->
+<h2>Custom EventEmitter (Class Pattern)</h2>
+
+<p>The standard pattern: extend EventEmitter for your own classes:</p>
+
+<pre><code><span class="keyword">import</span> { EventEmitter } <span class="keyword">from</span> <span class="string">'node:events'</span>;
+
+<span class="keyword">class</span> <span class="function">OrderService</span> <span class="keyword">extends</span> EventEmitter {
+  <span class="function">createOrder</span>(order) {
+    <span class="comment">// Business logic...</span>
+    <span class="keyword">const</span> savedOrder = { id: Date.now(), ...order };
+
+    <span class="comment">// Emit event — decouples "what happened" from "what to do about it"</span>
+    <span class="keyword">this</span>.<span class="function">emit</span>(<span class="string">'order:created'</span>, savedOrder);
+    <span class="keyword">return</span> savedOrder;
+  }
+
+  <span class="function">cancelOrder</span>(orderId) {
+    <span class="keyword">this</span>.<span class="function">emit</span>(<span class="string">'order:cancelled'</span>, orderId);
+  }
+}
+
+<span class="comment">// Usage — listeners are separate concerns</span>
+<span class="keyword">const</span> orders = <span class="keyword">new</span> <span class="function">OrderService</span>();
+
+orders.<span class="function">on</span>(<span class="string">'order:created'</span>, (order) => {
+  console.log(<span class="string">'📧 Send confirmation email for order'</span>, order.id);
+});
+
+orders.<span class="function">on</span>(<span class="string">'order:created'</span>, (order) => {
+  console.log(<span class="string">'📊 Update analytics'</span>, order.id);
+});
+
+orders.<span class="function">on</span>(<span class="string">'order:cancelled'</span>, (id) => {
+  console.log(<span class="string">'💸 Process refund for order'</span>, id);
+});
+
+orders.<span class="function">createOrder</span>({ product: <span class="string">'Node.js Course'</span>, price: <span class="number">49</span> });</code></pre>
+
+<div class="callout">
+  <strong>Why this pattern matters:</strong> The <code>OrderService</code> doesn't know about emails or analytics.
+  It just emits "something happened." Other modules subscribe and react. This is
+  <strong>loose coupling</strong> — you can add/remove reactions without changing the service.
+  This is the same pattern React uses with custom events and state management.
+</div>
+
+<!-- ============================================ -->
+<h2>Error Events — Special Behavior</h2>
+
+<p>
+  The <code>'error'</code> event is special in Node.js. If you emit <code>'error'</code> and no listener is
+  registered, <strong>Node.js throws the error and crashes the process</strong>.
+</p>
+
+<pre><code><span class="keyword">const</span> emitter = <span class="keyword">new</span> <span class="function">EventEmitter</span>();
+
+<span class="comment">// ❌ This CRASHES the process:</span>
+emitter.<span class="function">emit</span>(<span class="string">'error'</span>, <span class="keyword">new</span> Error(<span class="string">'something broke'</span>));
+
+<span class="comment">// ✅ Always register an error listener:</span>
+emitter.<span class="function">on</span>(<span class="string">'error'</span>, (err) => {
+  console.error(<span class="string">'Handled:'</span>, err.message);
+});
+emitter.<span class="function">emit</span>(<span class="string">'error'</span>, <span class="keyword">new</span> Error(<span class="string">'something broke'</span>));
+<span class="comment">// → "Handled: something broke" (no crash)</span></code></pre>
+
+<!-- ============================================ -->
+<h2><code>once()</code> — Fire and Forget</h2>
+
+<pre><code><span class="comment">// Listener auto-removes after first invocation</span>
+emitter.<span class="function">once</span>(<span class="string">'ready'</span>, () => {
+  console.log(<span class="string">'Server is ready (only fires once)'</span>);
+});
+
+emitter.<span class="function">emit</span>(<span class="string">'ready'</span>); <span class="comment">// → logs</span>
+emitter.<span class="function">emit</span>(<span class="string">'ready'</span>); <span class="comment">// → nothing (listener removed)</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Async Pattern: <code>events.once()</code> as a Promise</h2>
+
+<p>You can <code>await</code> an event using the static <code>once</code> utility:</p>
+
+<pre><code><span class="keyword">import</span> { once } <span class="keyword">from</span> <span class="string">'node:events'</span>;
+<span class="keyword">import</span> http <span class="keyword">from</span> <span class="string">'node:http'</span>;
+
+<span class="keyword">const</span> server = http.<span class="function">createServer</span>((req, res) => res.end(<span class="string">'ok'</span>));
+server.listen(<span class="number">3000</span>);
+
+<span class="comment">// Wait until the server is actually listening</span>
+<span class="keyword">await</span> <span class="function">once</span>(server, <span class="string">'listening'</span>);
+console.log(<span class="string">'Server is now accepting connections'</span>);</code></pre>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">What happens when you call <code>emitter.emit('error', new Error('fail'))</code> with no error listener registered?</p>
+  <button class="quiz-option" data-index="0">The error is silently ignored and execution continues normally</button>
+  <button class="quiz-option" data-index="1">Node.js throws the error and crashes the process with a stack trace</button>
+  <button class="quiz-option" data-index="2">The error is queued and delivered to the next registered listener</button>
+  <button class="quiz-option" data-index="3">emit() returns false and the error object is discarded</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">Are EventEmitter listeners called synchronously or asynchronously when <code>emit()</code> is invoked?</p>
+  <button class="quiz-option" data-index="0">Synchronously — all listeners run before emit() returns</button>
+  <button class="quiz-option" data-index="1">Asynchronously — listeners are queued for the next event loop tick</button>
+  <button class="quiz-option" data-index="2">It depends on whether the listener is an async function or not</button>
+  <button class="quiz-option" data-index="3">Concurrently — all listeners run in parallel using worker threads</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="nav-links">
+  <span>← (start of Events topic)</span>
+  <a href="0002-event-loop-phases.html">Lesson 2: The Event Loop — 6 Phases →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

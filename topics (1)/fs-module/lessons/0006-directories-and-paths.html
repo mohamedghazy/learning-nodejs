@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 6: Directories, Paths & import.meta.dirname</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Lesson 06</p>
+<h1>Directories, Paths & <code>import.meta.dirname</code></h1>
+<p class="subtitle">Build paths that work cross-platform, navigate directories like a pro, and never get bitten by "wrong working directory" bugs.</p>
+
+<!-- ============================================ -->
+<h2>The Path Problem</h2>
+
+<p>
+  Hardcoded paths like <code>'./config.json'</code> resolve relative to the <strong>process working directory</strong>
+  (<code>process.cwd()</code>) — not relative to your source file. If someone runs your script from
+  a different directory, paths break:
+</p>
+
+<pre><code><span class="comment"># Your script is at /app/src/server.js</span>
+<span class="comment"># It reads './config.json' expecting /app/src/config.json</span>
+
+<span class="comment"># ✓ Works when run from the script's directory:</span>
+cd /app/src && node server.js
+
+<span class="comment"># ✗ Breaks when run from project root:</span>
+cd /app && node src/server.js
+<span class="comment"># Looks for /app/config.json instead of /app/src/config.json</span></code></pre>
+
+<p>The <code>node:path</code> module and <code>import.meta.dirname</code> solve this.</p>
+
+<!-- ============================================ -->
+<h2><code>import.meta.dirname</code> — Your Script's Directory</h2>
+
+<p>
+  Available since Node 20.11.0, <code>import.meta.dirname</code> gives you the absolute path of
+  the directory containing the current module. It's the ESM equivalent of <code>__dirname</code>
+  in CommonJS.
+</p>
+
+<pre><code><span class="comment">// /app/src/server.js</span>
+console.log(import.meta.dirname);
+<span class="comment">// → '/app/src'  (always, regardless of where you run the command)</span>
+
+console.log(import.meta.filename);
+<span class="comment">// → '/app/src/server.js'</span></code></pre>
+
+<table>
+  <thead>
+    <tr><th>Property</th><th>Returns</th><th>CommonJS Equivalent</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>import.meta.dirname</code></td>
+      <td>Directory of current file</td>
+      <td><code>__dirname</code></td>
+    </tr>
+    <tr>
+      <td><code>import.meta.filename</code></td>
+      <td>Full path of current file</td>
+      <td><code>__filename</code></td>
+    </tr>
+    <tr>
+      <td><code>process.cwd()</code></td>
+      <td>Where <code>node</code> was invoked from</td>
+      <td>Same</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <strong>The rule:</strong> Use <code>import.meta.dirname</code> when referencing files relative to your
+  source code (configs, templates, static assets bundled with your module). Use
+  <code>process.cwd()</code> when referencing files relative to the project root (user configs,
+  data directories, workspaces). In Next.js, <code>process.cwd()</code> always gives you the
+  project root where <code>package.json</code> lives.
+</div>
+
+<!-- ============================================ -->
+<h2>The <code>node:path</code> Module</h2>
+
+<p>
+  Never concatenate paths with string templates (<code>`${dir}/${file}`</code>). Use <code>path</code> utilities
+  — they handle platform differences (Windows <code>\</code> vs Unix <code>/</code>) and normalize <code>..</code> and
+  double separators.
+</p>
+
+<h3>The Functions You'll Use Daily</h3>
+
+<pre><code><span class="keyword">import</span> { join, resolve, basename, extname, dirname, sep } <span class="keyword">from</span> <span class="string">'node:path'</span>;</code></pre>
+
+<table>
+  <thead>
+    <tr><th>Function</th><th>What It Does</th><th>Example</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>join(...parts)</code></td>
+      <td>Concatenate path segments, normalize separators</td>
+      <td><code>join('src', 'lib', 'utils.js')</code> → <code>'src/lib/utils.js'</code></td>
+    </tr>
+    <tr>
+      <td><code>resolve(...parts)</code></td>
+      <td>Build an <strong>absolute path</strong> (resolves from right to left)</td>
+      <td><code>resolve('src', 'config.json')</code> → <code>'/app/src/config.json'</code></td>
+    </tr>
+    <tr>
+      <td><code>basename(path)</code></td>
+      <td>Filename from full path</td>
+      <td><code>basename('/app/src/index.js')</code> → <code>'index.js'</code></td>
+    </tr>
+    <tr>
+      <td><code>extname(path)</code></td>
+      <td>File extension</td>
+      <td><code>extname('photo.png')</code> → <code>'.png'</code></td>
+    </tr>
+    <tr>
+      <td><code>dirname(path)</code></td>
+      <td>Parent directory</td>
+      <td><code>dirname('/app/src/index.js')</code> → <code>'/app/src'</code></td>
+    </tr>
+    <tr>
+      <td><code>sep</code></td>
+      <td>Platform separator</td>
+      <td><code>'/'</code> on macOS/Linux, <code>'\\'</code> on Windows</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3><code>join</code> vs <code>resolve</code> — When to Use Which</h3>
+
+<pre><code><span class="keyword">import</span> { join, resolve } <span class="keyword">from</span> <span class="string">'node:path'</span>;
+
+<span class="comment">// join: concatenates segments, normalizes, result may be relative</span>
+<span class="function">join</span>(<span class="string">'src'</span>, <span class="string">'lib'</span>, <span class="string">'utils.js'</span>);
+<span class="comment">// → 'src/lib/utils.js' (relative)</span>
+
+<span class="function">join</span>(<span class="string">'/app'</span>, <span class="string">'src'</span>, <span class="string">'../config.json'</span>);
+<span class="comment">// → '/app/config.json' (normalizes ..)</span>
+
+<span class="comment">// resolve: always produces an absolute path</span>
+<span class="comment">// If no absolute segment is provided, uses process.cwd() as base</span>
+<span class="function">resolve</span>(<span class="string">'src'</span>, <span class="string">'config.json'</span>);
+<span class="comment">// → '/current/working/dir/src/config.json' (absolute)</span>
+
+<span class="function">resolve</span>(<span class="string">'/app'</span>, <span class="string">'src'</span>, <span class="string">'config.json'</span>);
+<span class="comment">// → '/app/src/config.json' (absolute)</span></code></pre>
+
+<div class="callout">
+  <strong>Simple rule:</strong>
+  <ul>
+    <li><code>join</code> — when you already have an absolute base path (like <code>import.meta.dirname</code>) and want to append segments</li>
+    <li><code>resolve</code> — when you need to guarantee an absolute path from potentially relative input</li>
+  </ul>
+</div>
+
+<!-- ============================================ -->
+<h2>The Full-Stack Pattern: Referencing Files</h2>
+
+<pre><code><span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+<span class="keyword">import</span> { join } <span class="keyword">from</span> <span class="string">'node:path'</span>;
+
+<span class="comment">// ✅ File relative to this module (always correct)</span>
+<span class="keyword">const</span> template = <span class="keyword">await</span> <span class="function">readFile</span>(
+  <span class="function">join</span>(import.meta.dirname, <span class="string">'templates'</span>, <span class="string">'email.html'</span>),
+  <span class="string">'utf8'</span>
+);
+
+<span class="comment">// ✅ File relative to project root (common in Next.js)</span>
+<span class="keyword">const</span> config = <span class="keyword">await</span> <span class="function">readFile</span>(
+  <span class="function">join</span>(process.cwd(), <span class="string">'config'</span>, <span class="string">'settings.json'</span>),
+  <span class="string">'utf8'</span>
+);
+
+<span class="comment">// ❌ Fragile: depends on where `node` was run from</span>
+<span class="keyword">const</span> broken = <span class="keyword">await</span> <span class="function">readFile</span>(<span class="string">'./templates/email.html'</span>, <span class="string">'utf8'</span>);</code></pre>
+
+<!-- ============================================ -->
+<h2>Directory Operations</h2>
+
+<h3>Create Directories: <code>mkdir</code></h3>
+
+<pre><code><span class="keyword">import</span> { mkdir } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="comment">// Create nested directories (like mkdir -p)</span>
+<span class="comment">// No error if they already exist</span>
+<span class="keyword">await</span> <span class="function">mkdir</span>(<span class="string">'output/reports/2026'</span>, { recursive: <span class="keyword">true</span> });</code></pre>
+
+<h3>List Directory Contents: <code>readdir</code></h3>
+
+<pre><code><span class="keyword">import</span> { readdir } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+<span class="keyword">import</span> { join } <span class="keyword">from</span> <span class="string">'node:path'</span>;
+
+<span class="comment">// Basic: array of filenames</span>
+<span class="keyword">const</span> names = <span class="keyword">await</span> <span class="function">readdir</span>(<span class="string">'src'</span>);
+<span class="comment">// → ['index.js', 'utils.js', 'components']</span>
+
+<span class="comment">// Better: Dirent objects (know if file or directory without extra stat call)</span>
+<span class="keyword">const</span> entries = <span class="keyword">await</span> <span class="function">readdir</span>(<span class="string">'src'</span>, { withFileTypes: <span class="keyword">true</span> });
+
+<span class="keyword">for</span> (<span class="keyword">const</span> entry <span class="keyword">of</span> entries) {
+  <span class="keyword">const</span> fullPath = <span class="function">join</span>(<span class="string">'src'</span>, entry.name);
+  <span class="keyword">if</span> (entry.<span class="function">isFile</span>()) {
+    console.log(<span class="string">'File:'</span>, fullPath);
+  } <span class="keyword">else if</span> (entry.<span class="function">isDirectory</span>()) {
+    console.log(<span class="string">'Dir: '</span>, fullPath);
+  }
+}
+
+<span class="comment">// Recursive: list all files in entire tree (Node 18.17+)</span>
+<span class="keyword">const</span> allFiles = <span class="keyword">await</span> <span class="function">readdir</span>(<span class="string">'src'</span>, { recursive: <span class="keyword">true</span> });
+<span class="comment">// → ['index.js', 'utils.js', 'components', 'components/Button.js', ...]</span></code></pre>
+
+<div class="callout">
+  <strong>Always use <code>{ withFileTypes: true }</code></strong> when you need to distinguish files from
+  directories. Without it, you'd have to call <code>stat()</code> on each entry — which is an
+  extra syscall per item. <code>withFileTypes</code> gets that info in a single operation.
+</div>
+
+<h3>Remove Files and Directories: <code>rm</code></h3>
+
+<pre><code><span class="keyword">import</span> { rm } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="comment">// Remove a single file</span>
+<span class="keyword">await</span> <span class="function">rm</span>(<span class="string">'temp.log'</span>);
+
+<span class="comment">// Remove a directory tree (like rm -rf)</span>
+<span class="keyword">await</span> <span class="function">rm</span>(<span class="string">'output/old-reports'</span>, { recursive: <span class="keyword">true</span>, force: <span class="keyword">true</span> });
+<span class="comment">// force: true → no error if path doesn't exist</span></code></pre>
+
+<div class="callout warning">
+  <strong>Note:</strong> <code>rmdir</code> with the <code>recursive</code> option is deprecated. Use <code>rm</code> with
+  <code>{ recursive: true }</code> instead — it's the modern replacement (available since Node 14.14).
+</div>
+
+<h3>Rename/Move: <code>rename</code></h3>
+
+<pre><code><span class="keyword">import</span> { rename } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="comment">// Rename a file</span>
+<span class="keyword">await</span> <span class="function">rename</span>(<span class="string">'draft.md'</span>, <span class="string">'published.md'</span>);
+
+<span class="comment">// Move a file to another directory</span>
+<span class="keyword">await</span> <span class="function">rename</span>(<span class="string">'uploads/temp.png'</span>, <span class="string">'public/images/avatar.png'</span>);</code></pre>
+
+<h3>Get File Info: <code>stat</code></h3>
+
+<pre><code><span class="keyword">import</span> { stat } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">const</span> info = <span class="keyword">await</span> <span class="function">stat</span>(<span class="string">'package.json'</span>);
+
+console.log(info.size);         <span class="comment">// file size in bytes</span>
+console.log(info.isFile());     <span class="comment">// true</span>
+console.log(info.isDirectory());<span class="comment">// false</span>
+console.log(info.mtime);        <span class="comment">// last modified date</span>
+console.log(info.birthtime);    <span class="comment">// creation date</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Real-World Pattern: Walk a Directory Tree</h2>
+
+<p>
+  A recursive directory walker — useful for build tools, static site generators,
+  or finding all files matching a pattern:
+</p>
+
+<pre><code><span class="keyword">import</span> { readdir } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+<span class="keyword">import</span> { join, extname } <span class="keyword">from</span> <span class="string">'node:path'</span>;
+
+<span class="keyword">async function</span> <span class="function">findFiles</span>(dir, extension) {
+  <span class="keyword">const</span> results = [];
+  <span class="keyword">const</span> entries = <span class="keyword">await</span> <span class="function">readdir</span>(dir, { withFileTypes: <span class="keyword">true</span> });
+
+  <span class="keyword">for</span> (<span class="keyword">const</span> entry <span class="keyword">of</span> entries) {
+    <span class="keyword">const</span> fullPath = <span class="function">join</span>(dir, entry.name);
+    <span class="keyword">if</span> (entry.<span class="function">isDirectory</span>()) {
+      <span class="comment">// Recurse into subdirectories</span>
+      <span class="keyword">const</span> subResults = <span class="keyword">await</span> <span class="function">findFiles</span>(fullPath, extension);
+      results.push(...subResults);
+    } <span class="keyword">else if</span> (<span class="function">extname</span>(entry.name) === extension) {
+      results.push(fullPath);
+    }
+  }
+  <span class="keyword">return</span> results;
+}
+
+<span class="comment">// Find all .js files in src/</span>
+<span class="keyword">const</span> jsFiles = <span class="keyword">await</span> <span class="function">findFiles</span>(<span class="string">'src'</span>, <span class="string">'.js'</span>);
+console.log(jsFiles);
+
+<span class="comment">// Or use the built-in recursive option (Node 18.17+):</span>
+<span class="keyword">const</span> allEntries = <span class="keyword">await</span> <span class="function">readdir</span>(<span class="string">'src'</span>, { recursive: <span class="keyword">true</span>, withFileTypes: <span class="keyword">true</span> });
+<span class="keyword">const</span> jsFilesBuiltin = allEntries
+  .filter(e => e.<span class="function">isFile</span>() && <span class="function">extname</span>(e.name) === <span class="string">'.js'</span>)
+  .map(e => <span class="function">join</span>(e.parentPath, e.name));</code></pre>
+
+<!-- ============================================ -->
+<h2>Real-World Pattern: Ensure Output Directory Exists</h2>
+
+<p>
+  A common pattern before writing files — make sure the target directory exists:
+</p>
+
+<pre><code><span class="keyword">import</span> { mkdir, writeFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+<span class="keyword">import</span> { dirname, join } <span class="keyword">from</span> <span class="string">'node:path'</span>;
+
+<span class="keyword">async function</span> <span class="function">writeFileSafe</span>(filePath, data) {
+  <span class="comment">// Create parent directories if they don't exist</span>
+  <span class="keyword">await</span> <span class="function">mkdir</span>(<span class="function">dirname</span>(filePath), { recursive: <span class="keyword">true</span> });
+  <span class="keyword">await</span> <span class="function">writeFile</span>(filePath, data, <span class="string">'utf8'</span>);
+}
+
+<span class="comment">// Works even if output/reports/ doesn't exist yet</span>
+<span class="keyword">await</span> <span class="function">writeFileSafe</span>(
+  <span class="function">join</span>(process.cwd(), <span class="string">'output'</span>, <span class="string">'reports'</span>, <span class="string">'summary.json'</span>),
+  JSON.stringify({ total: <span class="number">42</span> })
+);</code></pre>
+
+<!-- ============================================ -->
+<h2>The Legacy <code>__dirname</code> Story</h2>
+
+<p>
+  In CommonJS (<code>require</code>), you had <code>__dirname</code> and <code>__filename</code> as globals. In ESM
+  (<code>import</code>), they don't exist. Before Node 20.11, you had to derive them:
+</p>
+
+<pre><code><span class="comment">// ❌ Old workaround (before Node 20.11)</span>
+<span class="keyword">import</span> { fileURLToPath } <span class="keyword">from</span> <span class="string">'node:url'</span>;
+<span class="keyword">import</span> { dirname } <span class="keyword">from</span> <span class="string">'node:path'</span>;
+<span class="keyword">const</span> __filename = <span class="function">fileURLToPath</span>(import.meta.url);
+<span class="keyword">const</span> __dirname = <span class="function">dirname</span>(__filename);
+
+<span class="comment">// ✅ Modern (Node 20.11+) — just use it directly</span>
+console.log(import.meta.dirname);
+console.log(import.meta.filename);</code></pre>
+
+<p>
+  You'll see the old <code>fileURLToPath</code> pattern in many existing codebases and tutorials.
+  Now you know it's no longer needed for Node 20.11+.
+</p>
+
+<!-- ============================================ -->
+<h2>Hands-On Exercise</h2>
+
+<p>
+  Create a script called <code>list-project.js</code> that lists all files in the current project,
+  organized by type:
+</p>
+
+<pre><code><span class="comment">// Usage: node list-project.js</span>
+<span class="comment">// Output:</span>
+<span class="comment">//   JavaScript: 5 files</span>
+<span class="comment">//     src/index.js</span>
+<span class="comment">//     src/utils.js</span>
+<span class="comment">//     ...</span>
+<span class="comment">//   JSON: 2 files</span>
+<span class="comment">//     package.json</span>
+<span class="comment">//     config.json</span>
+<span class="comment">//   Other: 1 file</span>
+<span class="comment">//     README.md</span></code></pre>
+
+<p>Requirements:</p>
+<ol>
+  <li>Use <code>readdir</code> with <code>{ recursive: true, withFileTypes: true }</code></li>
+  <li>Use <code>extname</code> to group files by extension</li>
+  <li>Use <code>join</code> to build full paths</li>
+  <li>Skip <code>node_modules</code> if present</li>
+</ol>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">Your script is at <code>/app/src/server.js</code> and reads <code>'./config.json'</code>. You run <code>node src/server.js</code> from <code>/app</code>. Where does Node look for config.json?</p>
+  <button class="quiz-option" data-index="0">/app/src/config.json — relative to the script file</button>
+  <button class="quiz-option" data-index="1">/config.json — relative to the filesystem root</button>
+  <button class="quiz-option" data-index="2">/app/config.json — relative to process.cwd() where node was run</button>
+  <button class="quiz-option" data-index="3">/app/src/server.js/config.json — appended to the script path</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">What does <code>readdir(dir, { withFileTypes: true })</code> give you that plain <code>readdir(dir)</code> doesn't?</p>
+  <button class="quiz-option" data-index="0">Dirent objects with isFile() and isDirectory() methods — no extra stat calls</button>
+  <button class="quiz-option" data-index="1">Full absolute paths instead of just filenames relative to the directory</button>
+  <button class="quiz-option" data-index="2">Files sorted alphabetically instead of filesystem order by default</button>
+  <button class="quiz-option" data-index="3">Recursive directory traversal including all nested subdirectories</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">You want a path that's always correct regardless of how/where the script is run. Which approach?</p>
+  <button class="quiz-option" data-index="0">path.resolve('./templates/email.html') — resolve makes it absolute</button>
+  <button class="quiz-option" data-index="1">path.join(import.meta.dirname, 'templates', 'email.html') — anchored to file location</button>
+  <button class="quiz-option" data-index="2">'./templates/email.html' — dot-slash is relative to the current file</button>
+  <button class="quiz-option" data-index="3">path.join(process.cwd(), 'templates', 'email.html') — cwd is always the project root</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<h2>Primary Sources</h2>
+<ul>
+  <li><a href="https://nodejs.org/api/path.html" target="_blank">Node.js <code>path</code> module documentation</a></li>
+  <li><a href="https://nodejs.org/api/esm.html#importmetadirname" target="_blank">Node.js <code>import.meta.dirname</code> docs</a></li>
+  <li><a href="https://nodejs.org/api/fs.html#fspromisesreaddirpath-options" target="_blank">Node.js <code>readdir</code> documentation</a> — including recursive option</li>
+  <li><a href="https://www.thenodebook.com/modules/import-meta-caching" target="_blank">The Node Book: import.meta, URLs & Caching</a></li>
+</ul>
+
+<div class="followup">
+  <strong>Questions?</strong> Ask me about path resolution edge cases, how <code>process.cwd()</code> works in
+  Docker containers, cross-platform path issues (Windows backslashes), or how this all fits
+  into Next.js project structures. Next up: Concurrency patterns with <code>Promise.all</code>.
+</div>
+
+<div class="nav-links">
+  <a href="0005-file-handles.html">← Lesson 5: File Handles</a>
+  <a href="0007-concurrency.html">Lesson 7: Concurrency Patterns →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

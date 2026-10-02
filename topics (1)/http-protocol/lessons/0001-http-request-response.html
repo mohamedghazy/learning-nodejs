@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HTTP Lesson 1: The Request-Response Cycle — What fetch() Hides From You</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">HTTP — Lesson 01</p>
+<h1>The Request-Response Cycle</h1>
+<p class="subtitle">What <code>fetch()</code> hides from you — and what you need to know to build the other side.</p>
+
+<!-- ============================================ -->
+<h2>You Already Know HTTP (More Than You Think)</h2>
+
+<p>
+  Every time you call <code>fetch('/api/users')</code> in React, you're sending an HTTP request.
+  Every time you check <code>response.status === 200</code>, you're reading an HTTP response.
+  You've been a <strong>client</strong> for 5 years. Now you're going to be the <strong>server</strong>.
+</p>
+
+<p>
+  HTTP (HyperText Transfer Protocol) is a text-based, request-response protocol.
+  That means:
+</p>
+<ul>
+  <li><strong>Text-based</strong> — the messages are human-readable (headers are plain text)</li>
+  <li><strong>Request-response</strong> — the client always initiates, the server always responds</li>
+  <li><strong>Stateless</strong> — each request is independent (the server doesn't remember previous requests)</li>
+</ul>
+
+<!-- ============================================ -->
+<h2>Anatomy of an HTTP Request</h2>
+
+<p>
+  When your React app calls <code>fetch('https://api.example.com/users?page=2')</code>,
+  this is the raw text that goes over the wire:
+</p>
+
+<pre><code><span class="keyword">GET</span> <span class="string">/users?page=2</span> HTTP/1.1
+<span class="function">Host:</span> api.example.com
+<span class="function">Accept:</span> application/json
+<span class="function">Authorization:</span> Bearer eyJhbG...
+<span class="function">User-Agent:</span> Mozilla/5.0 ...
+
+</code></pre>
+
+<p>Four parts:</p>
+
+<table>
+  <thead>
+    <tr><th>Part</th><th>Example</th><th>Purpose</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Request line</strong></td>
+      <td><code>GET /users?page=2 HTTP/1.1</code></td>
+      <td>Method + path + protocol version</td>
+    </tr>
+    <tr>
+      <td><strong>Headers</strong></td>
+      <td><code>Host: api.example.com</code></td>
+      <td>Metadata (key: value pairs)</td>
+    </tr>
+    <tr>
+      <td><strong>Blank line</strong></td>
+      <td>(empty)</td>
+      <td>Separates headers from body</td>
+    </tr>
+    <tr>
+      <td><strong>Body</strong> (optional)</td>
+      <td><code>{"name":"Mohamed"}</code></td>
+      <td>Data payload (POST, PUT, PATCH)</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>Anatomy of an HTTP Response</h2>
+
+<p>The server sends back:</p>
+
+<pre><code><span class="keyword">HTTP/1.1</span> <span class="number">200</span> <span class="string">OK</span>
+<span class="function">Content-Type:</span> application/json
+<span class="function">Content-Length:</span> 127
+<span class="function">Cache-Control:</span> max-age=60
+
+<span class="string">[{"id":1,"name":"Mohamed"},{"id":2,"name":"Ahmed"}]</span></code></pre>
+
+<table>
+  <thead>
+    <tr><th>Part</th><th>Example</th><th>Purpose</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Status line</strong></td>
+      <td><code>HTTP/1.1 200 OK</code></td>
+      <td>Protocol + status code + reason phrase</td>
+    </tr>
+    <tr>
+      <td><strong>Headers</strong></td>
+      <td><code>Content-Type: application/json</code></td>
+      <td>Metadata about the response</td>
+    </tr>
+    <tr>
+      <td><strong>Blank line</strong></td>
+      <td>(empty)</td>
+      <td>Separates headers from body</td>
+    </tr>
+    <tr>
+      <td><strong>Body</strong></td>
+      <td><code>[{"id":1,...}]</code></td>
+      <td>The actual data</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>HTTP Methods — The Action Verbs</h2>
+
+<p>You use these in <code>fetch()</code> already. Now you'll handle them on the server:</p>
+
+<table>
+  <thead>
+    <tr><th>Method</th><th>Purpose</th><th>Has Body?</th><th>Idempotent?</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>GET</code></td><td>Read/retrieve a resource</td><td>No</td><td>Yes</td></tr>
+    <tr><td><code>POST</code></td><td>Create a new resource</td><td>Yes</td><td>No</td></tr>
+    <tr><td><code>PUT</code></td><td>Replace a resource entirely</td><td>Yes</td><td>Yes</td></tr>
+    <tr><td><code>PATCH</code></td><td>Partially update a resource</td><td>Yes</td><td>No*</td></tr>
+    <tr><td><code>DELETE</code></td><td>Remove a resource</td><td>Rarely</td><td>Yes</td></tr>
+    <tr><td><code>HEAD</code></td><td>Same as GET but no body (metadata only)</td><td>No</td><td>Yes</td></tr>
+    <tr><td><code>OPTIONS</code></td><td>What methods are allowed? (CORS preflight)</td><td>No</td><td>Yes</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <strong>Idempotent</strong> means: calling it multiple times produces the same result as calling it once.
+  <code>DELETE /users/5</code> twice → user 5 is deleted (same state). <code>POST /users</code> twice → two users created (different state). This matters for retry logic and caching.
+</div>
+
+<!-- ============================================ -->
+<h2>Status Codes — The Server's Answer</h2>
+
+<p>You already know 200 and 404. Here's the full picture a backend dev needs:</p>
+
+<h3>2xx — Success</h3>
+<table>
+  <thead><tr><th>Code</th><th>Meaning</th><th>When to Use</th></tr></thead>
+  <tbody>
+    <tr><td><code>200</code></td><td>OK</td><td>GET succeeded, or general success</td></tr>
+    <tr><td><code>201</code></td><td>Created</td><td>POST succeeded, new resource created</td></tr>
+    <tr><td><code>204</code></td><td>No Content</td><td>DELETE succeeded, nothing to return</td></tr>
+  </tbody>
+</table>
+
+<h3>3xx — Redirection</h3>
+<table>
+  <thead><tr><th>Code</th><th>Meaning</th><th>When to Use</th></tr></thead>
+  <tbody>
+    <tr><td><code>301</code></td><td>Moved Permanently</td><td>URL changed forever (SEO redirect)</td></tr>
+    <tr><td><code>302</code></td><td>Found (temp redirect)</td><td>Temporary redirect (login → dashboard)</td></tr>
+    <tr><td><code>304</code></td><td>Not Modified</td><td>Client cache is still valid</td></tr>
+  </tbody>
+</table>
+
+<h3>4xx — Client Error (your frontend did something wrong)</h3>
+<table>
+  <thead><tr><th>Code</th><th>Meaning</th><th>When to Use</th></tr></thead>
+  <tbody>
+    <tr><td><code>400</code></td><td>Bad Request</td><td>Invalid JSON, missing required fields</td></tr>
+    <tr><td><code>401</code></td><td>Unauthorized</td><td>No auth token, or token expired</td></tr>
+    <tr><td><code>403</code></td><td>Forbidden</td><td>Authenticated but no permission</td></tr>
+    <tr><td><code>404</code></td><td>Not Found</td><td>Resource doesn't exist</td></tr>
+    <tr><td><code>405</code></td><td>Method Not Allowed</td><td>POST to a GET-only endpoint</td></tr>
+    <tr><td><code>409</code></td><td>Conflict</td><td>Duplicate resource (email already exists)</td></tr>
+    <tr><td><code>422</code></td><td>Unprocessable Entity</td><td>Valid JSON but failed validation</td></tr>
+    <tr><td><code>429</code></td><td>Too Many Requests</td><td>Rate limit exceeded</td></tr>
+  </tbody>
+</table>
+
+<h3>5xx — Server Error (your backend broke)</h3>
+<table>
+  <thead><tr><th>Code</th><th>Meaning</th><th>When to Use</th></tr></thead>
+  <tbody>
+    <tr><td><code>500</code></td><td>Internal Server Error</td><td>Unhandled exception, bug in your code</td></tr>
+    <tr><td><code>502</code></td><td>Bad Gateway</td><td>Upstream service (DB, API) unreachable</td></tr>
+    <tr><td><code>503</code></td><td>Service Unavailable</td><td>Server overloaded or in maintenance</td></tr>
+    <tr><td><code>504</code></td><td>Gateway Timeout</td><td>Upstream service took too long</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warning">
+  <strong>Senior-level distinction:</strong> <code>401</code> means "who are you?" (authentication).
+  <code>403</code> means "I know who you are, but you can't do this" (authorization).
+  Getting these right makes your API predictable for frontend developers.
+</div>
+
+<!-- ============================================ -->
+<h2>Headers You'll Use Every Day</h2>
+
+<h3>Request Headers (client → server)</h3>
+<table>
+  <thead><tr><th>Header</th><th>Purpose</th><th>Example</th></tr></thead>
+  <tbody>
+    <tr><td><code>Content-Type</code></td><td>Format of the request body</td><td><code>application/json</code></td></tr>
+    <tr><td><code>Authorization</code></td><td>Auth credentials</td><td><code>Bearer eyJhbG...</code></td></tr>
+    <tr><td><code>Accept</code></td><td>What response format the client wants</td><td><code>application/json</code></td></tr>
+    <tr><td><code>Cookie</code></td><td>Session/auth cookies</td><td><code>sessionId=abc123</code></td></tr>
+    <tr><td><code>Origin</code></td><td>Where the request came from (CORS)</td><td><code>https://myapp.com</code></td></tr>
+  </tbody>
+</table>
+
+<h3>Response Headers (server → client)</h3>
+<table>
+  <thead><tr><th>Header</th><th>Purpose</th><th>Example</th></tr></thead>
+  <tbody>
+    <tr><td><code>Content-Type</code></td><td>Format of the response body</td><td><code>application/json</code></td></tr>
+    <tr><td><code>Content-Length</code></td><td>Size in bytes</td><td><code>1024</code></td></tr>
+    <tr><td><code>Set-Cookie</code></td><td>Store cookies on client</td><td><code>sessionId=abc; HttpOnly</code></td></tr>
+    <tr><td><code>Cache-Control</code></td><td>Caching rules</td><td><code>max-age=3600</code></td></tr>
+    <tr><td><code>Access-Control-Allow-Origin</code></td><td>CORS: who can call this API</td><td><code>https://myapp.com</code></td></tr>
+    <tr><td><code>Location</code></td><td>URL for redirects (3xx) or created resource (201)</td><td><code>/users/42</code></td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>The Connection to Node.js</h2>
+
+<p>
+  On the server side, Node.js gives you the raw pieces of this protocol:
+</p>
+
+<pre><code><span class="keyword">import</span> http <span class="keyword">from</span> <span class="string">'node:http'</span>;
+
+<span class="keyword">const</span> server = http.<span class="function">createServer</span>((req, res) => {
+  <span class="comment">// req = the incoming HTTP request</span>
+  <span class="comment">//   req.method  → 'GET', 'POST', etc.</span>
+  <span class="comment">//   req.url     → '/users?page=2'</span>
+  <span class="comment">//   req.headers → { 'content-type': 'application/json', ... }</span>
+  <span class="comment">//   req itself  → a Readable stream (the body)</span>
+
+  <span class="comment">// res = the outgoing HTTP response</span>
+  <span class="comment">//   res.statusCode = 200</span>
+  <span class="comment">//   res.setHeader('Content-Type', 'application/json')</span>
+  <span class="comment">//   res.end(JSON.stringify(data))</span>
+  <span class="comment">//   res itself  → a Writable stream</span>
+});
+
+server.listen(<span class="number">3000</span>);</code></pre>
+
+<div class="callout">
+  <strong>Key insight from your fs lessons:</strong> <code>req</code> is a <strong>Readable stream</strong> (like
+  <code>createReadStream</code>) and <code>res</code> is a <strong>Writable stream</strong> (like <code>createWriteStream</code>).
+  Everything you learned about streams, Buffers, and <code>pipeline()</code> applies directly here.
+  The request body arrives in chunks. The response can be streamed.
+</div>
+
+<!-- ============================================ -->
+<h2>HTTP is Stateless — What That Means for You</h2>
+
+<p>
+  Each HTTP request is completely independent. The server doesn't remember previous requests
+  from the same client. This is why:
+</p>
+<ul>
+  <li><strong>Sessions exist</strong> — cookies or tokens carry identity across requests</li>
+  <li><strong>Every request must include auth</strong> — the server can't "remember" you're logged in</li>
+  <li><strong>REST APIs are stateless</strong> — all state lives in the URL, headers, or body</li>
+</ul>
+
+<p>
+  As a frontend dev, you deal with this by attaching tokens to every <code>fetch()</code>.
+  As a backend dev, you'll verify those tokens on every request.
+</p>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">A client sends <code>POST /users</code> with valid data. What status code should the server return on success?</p>
+  <button class="quiz-option" data-index="0">200 OK — the request was successful</button>
+  <button class="quiz-option" data-index="1">204 No Content — the operation completed with nothing to return</button>
+  <button class="quiz-option" data-index="2">201 Created — a new resource was created successfully</button>
+  <button class="quiz-option" data-index="3">202 Accepted — the request was received and will be processed later</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">A user is logged in (valid token) but tries to access an admin-only endpoint. Which status code?</p>
+  <button class="quiz-option" data-index="0">401 Unauthorized — the user needs to authenticate first</button>
+  <button class="quiz-option" data-index="1">403 Forbidden — authenticated but lacks permission for this action</button>
+  <button class="quiz-option" data-index="2">404 Not Found — hide the endpoint from non-admins</button>
+  <button class="quiz-option" data-index="3">400 Bad Request — the request is invalid for this user type</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">In Node.js, <code>req</code> (the request object) is which type of stream?</p>
+  <button class="quiz-option" data-index="0">A Readable stream — body data arrives in chunks you read from it</button>
+  <button class="quiz-option" data-index="1">A Writable stream — you write response data into it for the client</button>
+  <button class="quiz-option" data-index="2">A Transform stream — it modifies data as it passes through</button>
+  <button class="quiz-option" data-index="3">A Duplex stream — you can read request data and write responses to it</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">Why is HTTP called "stateless"?</p>
+  <button class="quiz-option" data-index="0">Because the server cannot store data between process restarts</button>
+  <button class="quiz-option" data-index="1">Because HTTP connections close after every single response is sent</button>
+  <button class="quiz-option" data-index="2">Because request and response bodies are always empty by default</button>
+  <button class="quiz-option" data-index="3">Because each request is independent — the server doesn't remember previous ones</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<h2>Primary Source</h2>
+<p>
+  Read the official <a href="https://nodejs.org/learn/http/anatomy-of-an-http-transaction" target="_blank">Node.js: Anatomy of an HTTP Transaction</a>
+  — it's short, authoritative, and walks through exactly how Node maps this protocol to code.
+</p>
+
+<div class="followup">
+  <strong>Questions?</strong> Ask me about HTTP/2 vs HTTP/1.1 differences, how HTTPS/TLS fits in,
+  CORS in depth, or anything else before we move to building servers in the next lesson.
+</div>
+
+<div class="nav-links">
+  <span>← (start of HTTP topic)</span>
+  <a href="0002-node-http-server.html">Lesson 2: Building an HTTP Server With Node.js →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

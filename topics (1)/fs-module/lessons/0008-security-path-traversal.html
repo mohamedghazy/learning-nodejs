@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 8: Security — Path Traversal Prevention</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Lesson 08</p>
+<h1>Security — Path Traversal Prevention</h1>
+<p class="subtitle">The #1 file system vulnerability in web apps, and the 5-line pattern that stops it.</p>
+
+<!-- ============================================ -->
+<h2>The Attack</h2>
+
+<p>
+  Your API serves files from an <code>uploads/</code> directory. A user requests their avatar:
+</p>
+
+<pre><code>GET /files/avatar.png
+<span class="comment">→ server reads: uploads/avatar.png ✓</span></code></pre>
+
+<p>An attacker requests:</p>
+
+<pre><code>GET /files/../../../etc/passwd
+<span class="comment">→ server reads: uploads/../../../etc/passwd</span>
+<span class="comment">→ resolves to: /etc/passwd ✗ (entire system exposed!)</span></code></pre>
+
+<p>
+  This is a <strong>path traversal</strong> (or directory traversal) attack. By injecting <code>../</code>
+  sequences, an attacker escapes your intended directory and reads (or writes) arbitrary
+  files on your server. It's in the
+  <a href="https://owasp.org/www-community/attacks/Path_Traversal" target="_blank">OWASP Top 10</a>
+  and remains one of the most common server vulnerabilities.
+</p>
+
+<div class="callout danger">
+  <strong>This affects you directly.</strong> If you build any API that serves user-uploaded files,
+  generates download links from user input, or reads files based on URL parameters —
+  you need this protection. Express static file serving, Next.js API routes handling
+  uploads, any file-serving endpoint.
+</div>
+
+<!-- ============================================ -->
+<h2>Why Naive Approaches Fail</h2>
+
+<h3>❌ Checking for <code>..</code> in the input string</h3>
+
+<pre><code><span class="comment">// ❌ WRONG: easily bypassed</span>
+<span class="keyword">if</span> (userInput.includes(<span class="string">'..'</span>)) {
+  <span class="keyword">throw new</span> Error(<span class="string">'Invalid path'</span>);
+}
+
+<span class="comment">// Bypasses:</span>
+<span class="comment">// - URL encoding: %2e%2e%2f  (../ encoded)</span>
+<span class="comment">// - Double encoding: %252e%252e%252f</span>
+<span class="comment">// - Null bytes: ../\0.png (older systems)</span>
+<span class="comment">// - Windows: ..\\ instead of ../</span></code></pre>
+
+<h3>❌ Using <code>path.join</code> alone</h3>
+
+<pre><code><span class="comment">// ❌ WRONG: join normalizes but doesn't constrain</span>
+<span class="keyword">const</span> filePath = <span class="function">join</span>(<span class="string">'uploads'</span>, userInput);
+<span class="comment">// join('uploads', '../../etc/passwd')</span>
+<span class="comment">// → '../etc/passwd' — still escapes!</span></code></pre>
+
+<h3>❌ Using <code>path.normalize</code> alone</h3>
+
+<pre><code><span class="comment">// ❌ WRONG: normalize resolves .., but doesn't check boundaries</span>
+<span class="keyword">const</span> normalized = path.<span class="function">normalize</span>(userInput);
+<span class="comment">// Still allows escape if you don't verify the result</span></code></pre>
+
+<!-- ============================================ -->
+<h2>The Correct Pattern (5 Lines)</h2>
+
+<p>
+  The fix: <strong>resolve the full path, then verify it starts with your base directory.</strong>
+</p>
+
+<pre><code><span class="keyword">import</span> { resolve, sep } <span class="keyword">from</span> <span class="string">'node:path'</span>;
+<span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">const</span> BASE_DIR = <span class="function">resolve</span>(<span class="string">'uploads'</span>); <span class="comment">// absolute path to allowed directory</span>
+
+<span class="keyword">function</span> <span class="function">safePath</span>(userInput) {
+  <span class="keyword">const</span> target = <span class="function">resolve</span>(BASE_DIR, userInput);
+
+  <span class="comment">// Verify the resolved path is still inside BASE_DIR</span>
+  <span class="keyword">if</span> (!target.startsWith(BASE_DIR + sep) && target !== BASE_DIR) {
+    <span class="keyword">throw new</span> Error(<span class="string">'Path traversal blocked'</span>);
+  }
+
+  <span class="keyword">return</span> target;
+}
+
+<span class="comment">// Safe usage:</span>
+<span class="keyword">const</span> file = <span class="keyword">await</span> <span class="function">readFile</span>(<span class="function">safePath</span>(<span class="string">'avatar.png'</span>));        <span class="comment">// ✓ OK</span>
+<span class="keyword">const</span> attack = <span class="keyword">await</span> <span class="function">readFile</span>(<span class="function">safePath</span>(<span class="string">'../../etc/passwd'</span>)); <span class="comment">// ✗ Throws!</span></code></pre>
+
+<h3>Why this works:</h3>
+<ol>
+  <li><code>resolve(BASE_DIR, userInput)</code> normalizes <em>all</em> <code>..</code>, <code>.</code>, double separators, etc. into a clean absolute path</li>
+  <li><code>target.startsWith(BASE_DIR + sep)</code> verifies the result is still inside the allowed directory</li>
+  <li>The <code>+ sep</code> prevents a sibling directory bypass — without it, <code>/app/uploads-private/secret.key</code> would pass a bare <code>startsWith('/app/uploads')</code> check</li>
+</ol>
+
+<!-- ============================================ -->
+<h2>The <code>+ sep</code> Guard Explained</h2>
+
+<p>
+  This is the subtle detail most developers miss:
+</p>
+
+<pre><code><span class="keyword">const</span> BASE_DIR = <span class="string">'/app/uploads'</span>;
+
+<span class="comment">// Without + sep:</span>
+<span class="string">'/app/uploads-private/secret.key'</span>.startsWith(<span class="string">'/app/uploads'</span>)
+<span class="comment">// → true! Sibling directory passes the check!</span>
+
+<span class="comment">// With + sep:</span>
+<span class="string">'/app/uploads-private/secret.key'</span>.startsWith(<span class="string">'/app/uploads/'</span>)
+<span class="comment">// → false ✓ Correctly blocked</span>
+
+<span class="string">'/app/uploads/avatar.png'</span>.startsWith(<span class="string">'/app/uploads/'</span>)
+<span class="comment">// → true ✓ Correctly allowed</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Real-World Pattern: Express File Download Endpoint</h2>
+
+<pre><code><span class="keyword">import</span> express <span class="keyword">from</span> <span class="string">'express'</span>;
+<span class="keyword">import</span> { resolve, sep } <span class="keyword">from</span> <span class="string">'node:path'</span>;
+<span class="keyword">import</span> { createReadStream } <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+<span class="keyword">import</span> { stat } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+<span class="keyword">import</span> { pipeline } <span class="keyword">from</span> <span class="string">'node:stream/promises'</span>;
+
+<span class="keyword">const</span> app = <span class="function">express</span>();
+<span class="keyword">const</span> UPLOADS_DIR = <span class="function">resolve</span>(<span class="string">'uploads'</span>);
+
+app.<span class="function">get</span>(<span class="string">'/files/:filename'</span>, <span class="keyword">async</span> (req, res) => {
+  <span class="keyword">try</span> {
+    <span class="comment">// 1. Validate path</span>
+    <span class="keyword">const</span> target = <span class="function">resolve</span>(UPLOADS_DIR, req.params.filename);
+    <span class="keyword">if</span> (!target.startsWith(UPLOADS_DIR + sep)) {
+      <span class="keyword">return</span> res.status(<span class="number">400</span>).json({ error: <span class="string">'Invalid filename'</span> });
+    }
+
+    <span class="comment">// 2. Check file exists and is a file (not a directory)</span>
+    <span class="keyword">const</span> info = <span class="keyword">await</span> <span class="function">stat</span>(target);
+    <span class="keyword">if</span> (!info.<span class="function">isFile</span>()) {
+      <span class="keyword">return</span> res.status(<span class="number">400</span>).json({ error: <span class="string">'Not a file'</span> });
+    }
+
+    <span class="comment">// 3. Stream the file (constant memory)</span>
+    res.setHeader(<span class="string">'Content-Length'</span>, info.size);
+    <span class="keyword">await</span> <span class="function">pipeline</span>(<span class="function">createReadStream</span>(target), res);
+  } <span class="keyword">catch</span> (err) {
+    <span class="keyword">if</span> (err.code === <span class="string">'ENOENT'</span>) {
+      res.status(<span class="number">404</span>).json({ error: <span class="string">'File not found'</span> });
+    } <span class="keyword">else</span> {
+      res.status(<span class="number">500</span>).json({ error: <span class="string">'Internal error'</span> });
+    }
+  }
+});</code></pre>
+
+<p>Notice how this combines multiple lessons:</p>
+<ul>
+  <li><strong>Lesson 4</strong> — streams + pipeline for serving the file efficiently</li>
+  <li><strong>Lesson 3</strong> — error handling by <code>error.code</code></li>
+  <li><strong>Lesson 6</strong> — <code>resolve</code> for building absolute paths</li>
+  <li><strong>This lesson</strong> — <code>startsWith(BASE + sep)</code> for security</li>
+</ul>
+
+<!-- ============================================ -->
+<h2>Real-World Pattern: Next.js API Route With Upload Validation</h2>
+
+<pre><code><span class="comment">// app/api/files/[name]/route.ts</span>
+<span class="keyword">import</span> { resolve, sep } <span class="keyword">from</span> <span class="string">'node:path'</span>;
+<span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+<span class="keyword">import</span> { NextResponse } <span class="keyword">from</span> <span class="string">'next/server'</span>;
+
+<span class="keyword">const</span> UPLOADS_DIR = <span class="function">resolve</span>(process.cwd(), <span class="string">'uploads'</span>);
+
+<span class="keyword">export async function</span> <span class="function">GET</span>(
+  request: Request,
+  { params }: { params: { name: string } }
+) {
+  <span class="keyword">const</span> target = <span class="function">resolve</span>(UPLOADS_DIR, params.name);
+
+  <span class="comment">// Path traversal check</span>
+  <span class="keyword">if</span> (!target.startsWith(UPLOADS_DIR + sep)) {
+    <span class="keyword">return</span> NextResponse.<span class="function">json</span>(
+      { error: <span class="string">'Invalid filename'</span> },
+      { status: <span class="number">400</span> }
+    );
+  }
+
+  <span class="keyword">try</span> {
+    <span class="keyword">const</span> file = <span class="keyword">await</span> <span class="function">readFile</span>(target);
+    <span class="keyword">return new</span> NextResponse(file, {
+      headers: { <span class="string">'Content-Type'</span>: <span class="string">'application/octet-stream'</span> },
+    });
+  } <span class="keyword">catch</span> (err) {
+    <span class="keyword">if</span> (err.code === <span class="string">'ENOENT'</span>) {
+      <span class="keyword">return</span> NextResponse.<span class="function">json</span>({ error: <span class="string">'Not found'</span> }, { status: <span class="number">404</span> });
+    }
+    <span class="keyword">throw</span> err;
+  }
+}</code></pre>
+
+<!-- ============================================ -->
+<h2>Additional Security Checks</h2>
+
+<p>Path traversal prevention is the baseline. In production, also consider:</p>
+
+<table>
+  <thead>
+    <tr><th>Check</th><th>Why</th><th>How</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Filename sanitization</td>
+      <td>Remove special chars that could cause issues</td>
+      <td>Strip anything except <code>[a-zA-Z0-9._-]</code></td>
+    </tr>
+    <tr>
+      <td>File type validation</td>
+      <td>Don't serve executable code as downloads</td>
+      <td>Magic number check (Lesson 5)</td>
+    </tr>
+    <tr>
+      <td>Size limits</td>
+      <td>Prevent resource exhaustion</td>
+      <td>Check <code>stat.size</code> before reading/streaming</td>
+    </tr>
+    <tr>
+      <td>Symlink resolution</td>
+      <td>Symlinks can escape the directory</td>
+      <td>Use <code>realpath()</code> then re-check boundary</td>
+    </tr>
+    <tr>
+      <td>Rate limiting</td>
+      <td>Prevent directory enumeration attacks</td>
+      <td>Limit requests per IP to file endpoints</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Symlink-Aware Validation</h3>
+
+<pre><code><span class="keyword">import</span> { realpath } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+<span class="keyword">import</span> { resolve, sep } <span class="keyword">from</span> <span class="string">'node:path'</span>;
+
+<span class="keyword">async function</span> <span class="function">safePathStrict</span>(baseDir, userInput) {
+  <span class="keyword">const</span> target = <span class="function">resolve</span>(baseDir, userInput);
+
+  <span class="comment">// First check: resolved path is within base</span>
+  <span class="keyword">if</span> (!target.startsWith(baseDir + sep) && target !== baseDir) {
+    <span class="keyword">throw new</span> Error(<span class="string">'Path traversal blocked'</span>);
+  }
+
+  <span class="comment">// Second check: follow symlinks and verify real path is still within base</span>
+  <span class="keyword">const</span> real = <span class="keyword">await</span> <span class="function">realpath</span>(target);
+  <span class="keyword">if</span> (!real.startsWith(baseDir + sep) && real !== baseDir) {
+    <span class="keyword">throw new</span> Error(<span class="string">'Symlink escape blocked'</span>);
+  }
+
+  <span class="keyword">return</span> real;
+}</code></pre>
+
+<!-- ============================================ -->
+<h2>Filename Sanitization Helper</h2>
+
+<pre><code><span class="keyword">function</span> <span class="function">sanitizeFilename</span>(input) {
+  <span class="comment">// Remove path separators and special characters</span>
+  <span class="comment">// Allow only alphanumeric, dots, hyphens, underscores</span>
+  <span class="keyword">return</span> input
+    .replace(<span class="string">/[^a-zA-Z0-9._-]/g</span>, <span class="string">''</span>)
+    .replace(<span class="string">/^\.+/</span>, <span class="string">''</span>); <span class="comment">// Remove leading dots (hidden files)</span>
+}
+
+<span class="comment">// Usage with path traversal check (defense in depth)</span>
+<span class="keyword">const</span> filename = <span class="function">sanitizeFilename</span>(req.params.name);
+<span class="keyword">const</span> target = <span class="function">safePath</span>(filename); <span class="comment">// still validate!</span></code></pre>
+
+<div class="callout">
+  <strong>Defense in depth:</strong> Sanitize the input AND validate the resolved path. Either
+  check alone might have edge cases. Together, they're robust.
+</div>
+
+<!-- ============================================ -->
+<h2>Hands-On Exercise</h2>
+
+<p>
+  Create a script called <code>safe-file-server.js</code> that:
+</p>
+<ol>
+  <li>Creates an HTTP server on port 3000</li>
+  <li>Serves files from a <code>public/</code> directory based on the URL path</li>
+  <li>Implements path traversal protection using <code>resolve</code> + <code>startsWith</code></li>
+  <li>Returns 400 for path traversal attempts, 404 for missing files</li>
+</ol>
+
+<p>Test it:</p>
+<pre><code><span class="comment"># Create test directory and file</span>
+mkdir -p public && echo "Hello!" > public/hello.txt
+
+<span class="comment"># Start your server</span>
+node safe-file-server.js
+
+<span class="comment"># Test valid request:</span>
+curl http://localhost:3000/hello.txt
+<span class="comment"># → "Hello!"</span>
+
+<span class="comment"># Test attack:</span>
+curl http://localhost:3000/../../../etc/passwd
+<span class="comment"># → {"error": "Invalid path"} (400)</span>
+
+<span class="comment"># Test missing file:</span>
+curl http://localhost:3000/nonexistent.txt
+<span class="comment"># → {"error": "Not found"} (404)</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">An attacker sends <code>GET /files/....//....//etc/passwd</code> to your API. Which defense blocks this?</p>
+  <button class="quiz-option" data-index="0">Checking if the raw input string contains the substring ".."</button>
+  <button class="quiz-option" data-index="1">Resolving the full path and verifying it starts with the base directory + sep</button>
+  <button class="quiz-option" data-index="2">Using path.join to concatenate the base directory with the user input</button>
+  <button class="quiz-option" data-index="3">Replacing all forward slashes in the input with empty strings</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">Why do we check <code>startsWith(BASE_DIR + sep)</code> instead of just <code>startsWith(BASE_DIR)</code>?</p>
+  <button class="quiz-option" data-index="0">The sep character ensures cross-platform compatibility with Windows backslashes</button>
+  <button class="quiz-option" data-index="1">Without sep, the check would fail for files directly inside the base directory</button>
+  <button class="quiz-option" data-index="2">The sep is required by the Node.js path module for correct string comparison</button>
+  <button class="quiz-option" data-index="3">Without sep, sibling directories like "uploads-private" would pass the check</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">You validate the resolved path is inside your base directory. An attacker creates a symlink inside your uploads folder pointing to <code>/etc</code>. What additional check prevents this?</p>
+  <button class="quiz-option" data-index="0">Checking that the file extension is in an allowed list before reading</button>
+  <button class="quiz-option" data-index="1">Verifying the file size is under a maximum threshold with stat()</button>
+  <button class="quiz-option" data-index="2">Using realpath() to resolve symlinks, then re-checking the boundary</button>
+  <button class="quiz-option" data-index="3">Sanitizing the filename to remove special characters before resolving</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<h2>Security Checklist for File-Serving Endpoints</h2>
+
+<ol>
+  <li>☐ Path traversal check: <code>resolve()</code> + <code>startsWith(base + sep)</code></li>
+  <li>☐ Filename sanitization: strip special characters</li>
+  <li>☐ Symlink check: <code>realpath()</code> + re-verify boundary</li>
+  <li>☐ File type validation: magic numbers for uploads</li>
+  <li>☐ Size limits: reject oversized requests</li>
+  <li>☐ Error responses: don't leak internal paths in error messages</li>
+  <li>☐ Rate limiting: prevent directory enumeration</li>
+</ol>
+
+<!-- ============================================ -->
+<h2>Primary Sources</h2>
+<ul>
+  <li><a href="https://owasp.org/www-community/attacks/Path_Traversal" target="_blank">OWASP: Path Traversal Attack</a></li>
+  <li><a href="https://nodejs.org/api/path.html#pathresolvepaths" target="_blank">Node.js <code>path.resolve()</code> documentation</a></li>
+  <li><a href="https://blog.openreplay.com/node-js-file-handling/" target="_blank">Modern File Handling in Node.js (OpenReplay, 2026)</a> — path traversal section</li>
+  <li><a href="https://nodejsdesignpatterns.com/blog/nodejs-path-traversal-security/" target="_blank">Node.js Path Traversal: Prevention & Security Guide (Node.js Design Patterns)</a></li>
+</ul>
+
+<div class="followup">
+  <strong>Questions?</strong> Ask me about securing file uploads in Express/Fastify, Content-Disposition
+  headers for downloads, integrating with cloud storage (S3/R2) instead of local filesystem,
+  or any other security concerns for your full-stack apps.
+</div>
+
+<div class="nav-links">
+  <a href="0007-concurrency.html">← Lesson 7: Concurrency Patterns</a>
+  <span>🎉 Course Complete</span>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

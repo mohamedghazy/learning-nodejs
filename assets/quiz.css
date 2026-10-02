@@ -1,0 +1,62 @@
+/* Quiz widget styles */
+.quiz {
+  margin: 1.5rem 0;
+  padding: 1.25rem;
+  background: #fafafa;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+.quiz-question {
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  font-size: 0.95rem;
+}
+
+.quiz-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.6rem 1rem;
+  margin-bottom: 0.4rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: white;
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.quiz-option:hover:not(:disabled) {
+  background: var(--color-accent-light);
+  border-color: var(--color-accent);
+}
+
+.quiz-option:disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.quiz-option.correct {
+  background: #e6f4ea;
+  border-color: var(--color-success);
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+.quiz-option.incorrect {
+  background: #fce8e6;
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+
+.quiz-feedback {
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  min-height: 1.4em;
+}
+
+.quiz-feedback.success { color: var(--color-success); }
+.quiz-feedback.error { color: var(--color-error); }

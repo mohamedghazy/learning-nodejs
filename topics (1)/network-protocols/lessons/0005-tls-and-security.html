@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Network Protocols 5: TLS — Encryption on the Wire</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Network Protocols — Lesson 05</p>
+<h1>TLS — Encryption on the Wire</h1>
+<p class="subtitle">What happens between TCP and HTTP, how certificates work, and <code>node:tls</code> in practice.</p>
+
+<!-- ============================================ -->
+<h2>The Problem TLS Solves</h2>
+
+<p>
+  TCP delivers your bytes reliably. But TCP has no concept of confidentiality or authenticity.
+  An attacker who can intercept your traffic (a coffee shop router, a compromised ISP, a man-in-the-middle)
+  can read and modify everything in plain text.
+</p>
+
+<p>
+  TLS (Transport Layer Security) sits between TCP and HTTP:
+</p>
+
+<pre><code><span class="comment">Application layer   HTTP / WebSocket / gRPC</span>
+<span class="comment">                    ───────────────────────</span>
+<span class="comment">Security layer      TLS / SSL  ← encrypts the data</span>
+<span class="comment">                    ───────────────────────</span>
+<span class="comment">Transport layer     TCP        ← delivers bytes reliably</span>
+<span class="comment">                    ───────────────────────</span>
+<span class="comment">Internet layer      IP         ← routes packets</span></code></pre>
+
+<p>TLS provides three guarantees:</p>
+<ul>
+  <li><strong>Confidentiality</strong> — data is encrypted; interceptors see garbage</li>
+  <li><strong>Integrity</strong> — data cannot be tampered with undetected (MAC/AEAD)</li>
+  <li><strong>Authentication</strong> — you know you're talking to the real server (certificates)</li>
+</ul>
+
+<!-- ============================================ -->
+<h2>The TLS Handshake</h2>
+
+<p>
+  Before encrypted data flows, TLS negotiates keys. TLS 1.3 (current standard) does this in one
+  round trip after the TCP handshake:
+</p>
+
+<pre><code><span class="comment">TCP Handshake (1 round trip)</span>
+  Client ──SYN──────────────────→ Server
+  Client ←──SYN-ACK────────────── Server
+  Client ──ACK──────────────────→ Server
+
+<span class="comment">TLS 1.3 Handshake (1 more round trip)</span>
+  Client ──ClientHello──────────→ Server
+         <span class="comment">(supported cipher suites,</span>
+         <span class="comment"> key share for ECDHE,</span>
+         <span class="comment"> random nonce)</span>
+
+  Client ←──ServerHello────────── Server
+         <span class="comment">(chosen cipher suite,</span>
+         <span class="comment"> server key share,</span>
+         <span class="comment"> certificate,</span>
+         <span class="comment"> Finished — server is now authenticated)</span>
+
+  Client ──Finished─────────────→ Server
+         <span class="comment">(client is authenticated if mutual TLS)</span>
+
+<span class="comment">Encrypted application data flows immediately after ↑</span></code></pre>
+
+<div class="callout">
+  <strong>TLS 1.2 vs 1.3:</strong> TLS 1.2 (still common) requires 2 round trips.
+  TLS 1.3 (current) requires 1 round trip and supports 0-RTT resumption for reconnecting clients.
+  Always enforce TLS 1.2 minimum; prefer TLS 1.3 in new deployments.
+</div>
+
+<!-- ============================================ -->
+<h2>How Certificates Work</h2>
+
+<p>
+  A TLS certificate is a signed document that says:
+  <em>"I am <code>api.example.com</code>, and a trusted authority (CA) vouches for me."</em>
+</p>
+
+<p>The trust chain:</p>
+
+<pre><code><span class="comment">Root CA (e.g., Let's Encrypt ISRG Root X1)</span>
+  └── Intermediate CA (e.g., Let's Encrypt R3)</span>
+        └── Your certificate (api.example.com)</span>
+
+<span class="comment">Your browser/Node.js has a built-in list of trusted Root CAs.</span>
+<span class="comment">It walks the chain: can it trace to a trusted root? → Valid.</span></code></pre>
+
+<p>
+  Each certificate contains:
+</p>
+<ul>
+  <li><strong>Subject</strong> — the domain (or wildcard: <code>*.example.com</code>)</li>
+  <li><strong>Issuer</strong> — which CA signed it</li>
+  <li><strong>Valid from / until</strong> — expiry (typically 90 days for Let's Encrypt)</li>
+  <li><strong>Public key</strong> — used in key exchange</li>
+  <li><strong>Signature</strong> — CA's digital signature (verifies authenticity)</li>
+  <li><strong>SANs</strong> — Subject Alternative Names (other domains this cert covers)</li>
+</ul>
+
+<!-- ============================================ -->
+<h2>node:tls — Raw TLS in Node.js</h2>
+
+<h3>Creating a TLS Server</h3>
+
+<pre><code><span class="keyword">import</span> tls <span class="keyword">from</span> <span class="string">'node:tls'</span>;
+<span class="keyword">import</span> fs <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+
+<span class="keyword">const</span> options = {
+  key:  fs.<span class="function">readFileSync</span>(<span class="string">'./server.key'</span>),   <span class="comment">// Private key (keep secret!)</span>
+  cert: fs.<span class="function">readFileSync</span>(<span class="string">'./server.crt'</span>),   <span class="comment">// Certificate</span>
+  ca:   fs.<span class="function">readFileSync</span>(<span class="string">'./ca.crt'</span>),       <span class="comment">// CA cert (if using custom CA)</span>
+
+  <span class="comment">// Enforce minimum TLS version</span>
+  minVersion: <span class="string">'TLSv1.2'</span>,
+
+  <span class="comment">// Allowed cipher suites (explicit allowlist is safer than default)</span>
+  ciphers: <span class="string">'ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384'</span>,
+};
+
+<span class="keyword">const</span> server = tls.<span class="function">createServer</span>(options, (socket) => {
+  console.<span class="function">log</span>(<span class="string">'TLS version:'</span>, socket.<span class="function">getProtocol</span>());
+  console.<span class="function">log</span>(<span class="string">'Cipher:'</span>, socket.<span class="function">getCipher</span>().name);
+
+  socket.<span class="function">write</span>(<span class="string">'Hello over TLS!\n'</span>);
+  socket.<span class="function">pipe</span>(socket); <span class="comment">// echo</span>
+});
+
+server.<span class="function">listen</span>(<span class="number">8443</span>);</code></pre>
+
+<h3>Creating a TLS Client</h3>
+
+<pre><code><span class="keyword">import</span> tls <span class="keyword">from</span> <span class="string">'node:tls'</span>;
+
+<span class="keyword">const</span> socket = tls.<span class="function">connect</span>({
+  host: <span class="string">'api.example.com'</span>,
+  port: <span class="number">443</span>,
+  <span class="comment">// Node.js verifies the certificate by default.</span>
+  <span class="comment">// rejectUnauthorized: false disables this — NEVER do this in production.</span>
+}, () => {
+  console.<span class="function">log</span>(<span class="string">'Connected, authorized:'</span>, socket.authorized);
+  socket.<span class="function">write</span>(<span class="string">'GET / HTTP/1.1\r\nHost: api.example.com\r\n\r\n'</span>);
+});
+
+socket.<span class="function">on</span>(<span class="string">'data'</span>, (data) => console.<span class="function">log</span>(data.<span class="function">toString</span>()));</code></pre>
+
+<!-- ============================================ -->
+<h2>HTTPS Is Just TLS + HTTP</h2>
+
+<p>
+  <code>node:https</code> is simply <code>node:http</code> wrapped with <code>node:tls</code>.
+  All the TLS options are passed straight through:
+</p>
+
+<pre><code><span class="keyword">import</span> https <span class="keyword">from</span> <span class="string">'node:https'</span>;
+<span class="keyword">import</span> fs <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+
+<span class="keyword">const</span> server = https.<span class="function">createServer</span>({
+  key:  fs.<span class="function">readFileSync</span>(<span class="string">'./server.key'</span>),
+  cert: fs.<span class="function">readFileSync</span>(<span class="string">'./server.crt'</span>),
+}, (req, res) => {
+  res.<span class="function">writeHead</span>(<span class="number">200</span>, { <span class="string">'Content-Type'</span>: <span class="string">'application/json'</span> });
+  res.<span class="function">end</span>(JSON.<span class="function">stringify</span>({ secure: <span class="keyword">true</span> }));
+});
+
+server.<span class="function">listen</span>(<span class="number">443</span>);</code></pre>
+
+<div class="callout">
+  <strong>In production, you rarely terminate TLS in Node.js directly.</strong>
+  Most production setups terminate TLS at a reverse proxy (Nginx, Caddy, AWS ALB)
+  and proxy plain HTTP to your Node.js app. This is easier to manage (cert rotation,
+  multiple instances, HTTP/2 support) and offloads the crypto work from Node.
+</div>
+
+<!-- ============================================ -->
+<h2>Self-Signed Certificates for Development</h2>
+
+<p>
+  For local HTTPS development, generate a self-signed cert:
+</p>
+
+<pre><code><span class="comment"># Generate a private key and self-signed certificate</span>
+openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt \
+  -days 365 -nodes -subj <span class="string">'/CN=localhost'</span>
+
+<span class="comment"># Or use mkcert for a locally-trusted cert (recommended)</span>
+<span class="comment"># brew install mkcert && mkcert -install && mkcert localhost</span></code></pre>
+
+<div class="callout warning">
+  <strong>Never disable certificate verification in production.</strong>
+  <code>rejectUnauthorized: false</code> or <code>NODE_TLS_REJECT_UNAUTHORIZED=0</code>
+  defeats the entire point of TLS and opens you to man-in-the-middle attacks.
+  For dev environments, use <code>mkcert</code> or add your CA to the trust store.
+</div>
+
+<!-- ============================================ -->
+<h2>Mutual TLS (mTLS) — Both Sides Authenticate</h2>
+
+<p>
+  Standard TLS authenticates the <em>server</em> to the <em>client</em>.
+  Mutual TLS (mTLS) also authenticates the <em>client</em> to the <em>server</em>.
+  The client presents its own certificate.
+</p>
+
+<p>
+  This is the standard for service-to-service communication in microservices (Istio, Linkerd use it).
+  No passwords or tokens — identity is cryptographic.
+</p>
+
+<pre><code><span class="comment">// Server: require client certificate</span>
+<span class="keyword">const</span> server = tls.<span class="function">createServer</span>({
+  key:  fs.<span class="function">readFileSync</span>(<span class="string">'./server.key'</span>),
+  cert: fs.<span class="function">readFileSync</span>(<span class="string">'./server.crt'</span>),
+  ca:   fs.<span class="function">readFileSync</span>(<span class="string">'./client-ca.crt'</span>),  <span class="comment">// Trust this CA for clients</span>
+  requestCert: <span class="keyword">true</span>,        <span class="comment">// Request client cert</span>
+  rejectUnauthorized: <span class="keyword">true</span>, <span class="comment">// Reject if cert is invalid</span>
+}, (socket) => {
+  <span class="keyword">if</span> (!socket.authorized) {
+    socket.<span class="function">destroy</span>(<span class="keyword">new</span> <span class="function">Error</span>(<span class="string">'Unauthorized client'</span>));
+    <span class="keyword">return</span>;
+  }
+  <span class="comment">// Client is authenticated</span>
+});</code></pre>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">What does TLS authentication guarantee that TCP alone cannot?</p>
+  <button class="quiz-option" data-index="0">That data packets arrive in the correct order without gaps or loss</button>
+  <button class="quiz-option" data-index="1">That you are communicating with the real server, not an impersonator</button>
+  <button class="quiz-option" data-index="2">That the data transfer rate is fast enough for low-latency applications</button>
+  <button class="quiz-option" data-index="3">That no firewall or proxy can inspect the connection metadata or headers</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">In production, where does TLS typically terminate in a Node.js deployment?</p>
+  <button class="quiz-option" data-index="0">Inside Node.js itself — the https module handles all TLS directly</button>
+  <button class="quiz-option" data-index="1">At the operating system level — the kernel manages TLS transparently</button>
+  <button class="quiz-option" data-index="2">At the DNS resolver — certificates are verified before routing traffic</button>
+  <button class="quiz-option" data-index="3">At a reverse proxy (Nginx/ALB) — Node receives plain HTTP behind it</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">What does <code>rejectUnauthorized: false</code> do in a TLS connection?</p>
+  <button class="quiz-option" data-index="0">Disables certificate verification — opens you to man-in-the-middle attacks</button>
+  <button class="quiz-option" data-index="1">Allows expired certificates to be used without throwing an error</button>
+  <button class="quiz-option" data-index="2">Tells the server not to request a client certificate for mTLS</button>
+  <button class="quiz-option" data-index="3">Falls back to TLS 1.2 if TLS 1.3 is not supported by the server</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">What is mutual TLS (mTLS) used for?</p>
+  <button class="quiz-option" data-index="0">Encrypting both the request and response body with separate cipher keys</button>
+  <button class="quiz-option" data-index="1">Running TLS on both port 443 and port 80 simultaneously for fallback</button>
+  <button class="quiz-option" data-index="2">Both client and server authenticate each other — used for service-to-service</button>
+  <button class="quiz-option" data-index="3">Multiplexing multiple TLS connections over a single TCP socket stream</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<h2>Primary Source</h2>
+<p>
+  Node.js docs: <a href="https://nodejs.org/api/tls.html" target="_blank">node:tls API reference</a>.
+  For TLS internals: <a href="https://www.cloudflare.com/learning/ssl/what-happens-in-a-tls-handshake/" target="_blank">Cloudflare: What happens in a TLS handshake?</a>
+  — precise, visual, and highly trustworthy.
+</p>
+
+<div class="followup">
+  <strong>Questions?</strong> Ask me about certificate pinning, OCSP stapling, SNI (Server Name Indication),
+  how Let's Encrypt ACME challenges work, or how to rotate TLS certificates with zero downtime.
+</div>
+
+<div class="nav-links">
+  <a href="0004-dns-and-lookup.html">← Lesson 4: DNS</a>
+  <a href="../reference/network-protocols-cheatsheet.html">Reference: Network Protocols Cheatsheet →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

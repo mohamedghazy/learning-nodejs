@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 7: Concurrency — Promise.all vs Promise.allSettled for Batch File Operations</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Lesson 07</p>
+<h1>Concurrency Patterns</h1>
+<p class="subtitle"><code>Promise.all</code> vs <code>Promise.allSettled</code> — when one failure should abort everything, and when it shouldn't.</p>
+
+<!-- ============================================ -->
+<h2>The Problem: Sequential Is Slow</h2>
+
+<p>
+  You need to read 10 config files. Each read takes ~10ms (disk I/O). If you <code>await</code>
+  them one by one, that's 100ms minimum. But disk I/O is non-blocking — Node can start
+  all 10 reads simultaneously and wait for them all to finish:
+</p>
+
+<pre><code><span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="comment">// ❌ Sequential: ~100ms (waits for each before starting next)</span>
+<span class="keyword">const</span> a = <span class="keyword">await</span> <span class="function">readFile</span>(<span class="string">'a.json'</span>, <span class="string">'utf8'</span>);
+<span class="keyword">const</span> b = <span class="keyword">await</span> <span class="function">readFile</span>(<span class="string">'b.json'</span>, <span class="string">'utf8'</span>);
+<span class="keyword">const</span> c = <span class="keyword">await</span> <span class="function">readFile</span>(<span class="string">'c.json'</span>, <span class="string">'utf8'</span>);
+
+<span class="comment">// ✅ Concurrent: ~10ms (all reads happen simultaneously)</span>
+<span class="keyword">const</span> [a, b, c] = <span class="keyword">await</span> Promise.<span class="function">all</span>([
+  <span class="function">readFile</span>(<span class="string">'a.json'</span>, <span class="string">'utf8'</span>),
+  <span class="function">readFile</span>(<span class="string">'b.json'</span>, <span class="string">'utf8'</span>),
+  <span class="function">readFile</span>(<span class="string">'c.json'</span>, <span class="string">'utf8'</span>),
+]);</code></pre>
+
+<p>
+  This isn't parallelism (Node is single-threaded) — it's <strong>concurrency</strong>. The I/O
+  operations happen at the OS level simultaneously while your JavaScript waits.
+  You already do this with <code>fetch</code> in React — same concept, different I/O.
+</p>
+
+<!-- ============================================ -->
+<h2>The Decision: All-or-Nothing vs Partial Success</h2>
+
+<table>
+  <thead>
+    <tr><th>Method</th><th>Behavior on failure</th><th>Use When</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>Promise.all()</code></td>
+      <td><strong>Rejects immediately</strong> on first failure</td>
+      <td>All operations must succeed — one failure means abort</td>
+    </tr>
+    <tr>
+      <td><code>Promise.allSettled()</code></td>
+      <td><strong>Waits for all</strong> to complete, reports each result</td>
+      <td>Partial failure is acceptable — process what succeeded</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2><code>Promise.all</code> — All Must Succeed</h2>
+
+<p>
+  Use when every operation is required. If any single promise rejects, <code>Promise.all</code>
+  rejects immediately with that error — the other operations still complete in the
+  background but their results are discarded.
+</p>
+
+<h3>Example: Load required configuration files</h3>
+
+<pre><code><span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">const</span> configFiles = [
+  <span class="string">'config/database.json'</span>,
+  <span class="string">'config/auth.json'</span>,
+  <span class="string">'config/features.json'</span>,
+];
+
+<span class="keyword">try</span> {
+  <span class="comment">// Start all reads simultaneously, parse each as JSON</span>
+  <span class="keyword">const</span> [dbConfig, authConfig, featuresConfig] = <span class="keyword">await</span> Promise.<span class="function">all</span>(
+    configFiles.map(file =>
+      <span class="function">readFile</span>(file, <span class="string">'utf8'</span>).then(JSON.parse)
+    )
+  );
+
+  console.log(<span class="string">'All configs loaded:'</span>, { dbConfig, authConfig, featuresConfig });
+} <span class="keyword">catch</span> (error) {
+  <span class="comment">// If ANY file fails, we land here</span>
+  console.error(<span class="string">`Cannot start: ${error.message}`</span>);
+  process.exit(<span class="number">1</span>);
+}</code></pre>
+
+<p>
+  <strong>Why all-or-nothing here?</strong> If the database config is missing, the server can't start.
+  There's no point loading the other configs — we need all of them.
+</p>
+
+<h3>Example: Write multiple related files</h3>
+
+<pre><code><span class="keyword">import</span> { writeFile, mkdir } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">async function</span> <span class="function">generateReports</span>(data) {
+  <span class="keyword">await</span> <span class="function">mkdir</span>(<span class="string">'reports'</span>, { recursive: <span class="keyword">true</span> });
+
+  <span class="keyword">const</span> reports = [
+    { path: <span class="string">'reports/daily.json'</span>, content: data.daily },
+    { path: <span class="string">'reports/weekly.json'</span>, content: data.weekly },
+    { path: <span class="string">'reports/monthly.json'</span>, content: data.monthly },
+  ];
+
+  <span class="comment">// Write all concurrently — if disk is full, all fail together</span>
+  <span class="keyword">await</span> Promise.<span class="function">all</span>(
+    reports.map(r =>
+      <span class="function">writeFile</span>(r.path, JSON.stringify(r.content, <span class="keyword">null</span>, <span class="number">2</span>), <span class="string">'utf8'</span>)
+    )
+  );
+}</code></pre>
+
+<!-- ============================================ -->
+<h2><code>Promise.allSettled</code> — Tolerate Partial Failure</h2>
+
+<p>
+  Use when some operations can fail without invalidating the whole batch.
+  <code>Promise.allSettled</code> <strong>always resolves</strong> (never rejects). It returns an array where
+  each entry is either:
+</p>
+
+<ul>
+  <li><code>{ status: 'fulfilled', value: ... }</code> — success</li>
+  <li><code>{ status: 'rejected', reason: ... }</code> — failure</li>
+</ul>
+
+<h3>Example: Load optional plugin configs</h3>
+
+<pre><code><span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">const</span> pluginConfigs = [
+  <span class="string">'plugins/analytics.json'</span>,
+  <span class="string">'plugins/logging.json'</span>,
+  <span class="string">'plugins/caching.json'</span>,    <span class="comment">// might not exist</span>
+  <span class="string">'plugins/monitoring.json'</span>,  <span class="comment">// might not exist</span>
+];
+
+<span class="keyword">const</span> results = <span class="keyword">await</span> Promise.<span class="function">allSettled</span>(
+  pluginConfigs.map(file =>
+    <span class="function">readFile</span>(file, <span class="string">'utf8'</span>).then(JSON.parse)
+  )
+);
+
+<span class="comment">// Separate successes from failures</span>
+<span class="keyword">const</span> loaded = results
+  .filter(r => r.status === <span class="string">'fulfilled'</span>)
+  .map(r => r.value);
+
+<span class="keyword">const</span> failed = results
+  .filter(r => r.status === <span class="string">'rejected'</span>)
+  .map((r, i) => ({ file: pluginConfigs[i], code: r.reason.code }));
+
+console.log(<span class="string">`Loaded ${loaded.length} plugins, ${failed.length} unavailable`</span>);
+<span class="comment">// → "Loaded 2 plugins, 2 unavailable"</span>
+
+<span class="keyword">if</span> (failed.length > <span class="number">0</span>) {
+  console.warn(<span class="string">'Missing plugins:'</span>, failed);
+}</code></pre>
+
+<p>
+  <strong>Why tolerate failure here?</strong> Plugins are optional. The server should start even if
+  some plugin configs are missing — just without those plugins.
+</p>
+
+<h3>Example: Process user uploads (best effort)</h3>
+
+<pre><code><span class="keyword">import</span> { readFile, writeFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+<span class="keyword">import</span> { join } <span class="keyword">from</span> <span class="string">'node:path'</span>;
+
+<span class="keyword">async function</span> <span class="function">processUploads</span>(filePaths) {
+  <span class="keyword">const</span> results = <span class="keyword">await</span> Promise.<span class="function">allSettled</span>(
+    filePaths.map(<span class="keyword">async</span> (path) => {
+      <span class="keyword">const</span> data = <span class="keyword">await</span> <span class="function">readFile</span>(path);
+      <span class="keyword">const</span> processed = <span class="keyword">await</span> <span class="function">processImage</span>(data);
+      <span class="keyword">const</span> outPath = <span class="function">join</span>(<span class="string">'processed'</span>, <span class="function">basename</span>(path));
+      <span class="keyword">await</span> <span class="function">writeFile</span>(outPath, processed);
+      <span class="keyword">return</span> outPath;
+    })
+  );
+
+  <span class="keyword">const</span> succeeded = results.filter(r => r.status === <span class="string">'fulfilled'</span>);
+  <span class="keyword">const</span> failed = results.filter(r => r.status === <span class="string">'rejected'</span>);
+
+  <span class="keyword">return</span> {
+    processed: succeeded.map(r => r.value),
+    errors: failed.map((r, i) => ({
+      file: filePaths[i],
+      error: r.reason.message,
+    })),
+  };
+}</code></pre>
+
+<!-- ============================================ -->
+<h2>The Decision Flowchart</h2>
+
+<pre><code><span class="comment">// Ask yourself:</span>
+<span class="comment">// "If one operation fails, can the others still be useful?"</span>
+<span class="comment">//</span>
+<span class="comment">//   YES → Promise.allSettled()</span>
+<span class="comment">//         Examples: optional plugins, batch processing, user uploads</span>
+<span class="comment">//</span>
+<span class="comment">//   NO  → Promise.all()</span>
+<span class="comment">//         Examples: required configs, database + cache init, related writes</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Advanced: Controlled Concurrency</h2>
+
+<p>
+  <code>Promise.all</code> with 10,000 file reads will try to open 10,000 file descriptors simultaneously —
+  hitting <code>EMFILE</code> (too many open files). You need a concurrency limit:
+</p>
+
+<pre><code><span class="keyword">async function</span> <span class="function">mapWithConcurrency</span>(items, fn, limit = <span class="number">10</span>) {
+  <span class="keyword">const</span> results = [];
+  <span class="keyword">const</span> executing = <span class="keyword">new</span> Set();
+
+  <span class="keyword">for</span> (<span class="keyword">const</span> [index, item] <span class="keyword">of</span> items.entries()) {
+    <span class="keyword">const</span> promise = fn(item, index).then(result => {
+      executing.delete(promise);
+      <span class="keyword">return</span> result;
+    });
+    executing.add(promise);
+    results.push(promise);
+
+    <span class="keyword">if</span> (executing.size >= limit) {
+      <span class="keyword">await</span> Promise.<span class="function">race</span>(executing);
+    }
+  }
+
+  <span class="keyword">return</span> Promise.<span class="function">all</span>(results);
+}
+
+<span class="comment">// Process 1000 files, max 20 at a time</span>
+<span class="keyword">const</span> files = <span class="keyword">await</span> <span class="function">readdir</span>(<span class="string">'uploads'</span>);
+<span class="keyword">const</span> processed = <span class="keyword">await</span> <span class="function">mapWithConcurrency</span>(
+  files,
+  <span class="keyword">async</span> (file) => {
+    <span class="keyword">const</span> data = <span class="keyword">await</span> <span class="function">readFile</span>(<span class="function">join</span>(<span class="string">'uploads'</span>, file));
+    <span class="keyword">return</span> <span class="function">processFile</span>(data);
+  },
+  <span class="number">20</span> <span class="comment">// max 20 concurrent reads</span>
+);</code></pre>
+
+<div class="callout">
+  <strong>Production tip:</strong> For simple cases, the npm package
+  <a href="https://www.npmjs.com/package/p-limit" target="_blank"><code>p-limit</code></a> does this
+  in a few lines. But the pattern above shows what's happening under the hood — it uses
+  <code>Promise.race</code> to wait for any one slot to free up before starting the next operation.
+</div>
+
+<!-- ============================================ -->
+<h2>Pattern: Parallel Reads, Sequential Processing</h2>
+
+<p>
+  Sometimes you want to read files concurrently (fast I/O) but process results in order:
+</p>
+
+<pre><code><span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">const</span> files = [<span class="string">'chapter1.md'</span>, <span class="string">'chapter2.md'</span>, <span class="string">'chapter3.md'</span>];
+
+<span class="comment">// Start all reads concurrently</span>
+<span class="keyword">const</span> contents = <span class="keyword">await</span> Promise.<span class="function">all</span>(
+  files.map(f => <span class="function">readFile</span>(f, <span class="string">'utf8'</span>))
+);
+
+<span class="comment">// Process in order (contents[0] is always chapter1, etc.)</span>
+<span class="keyword">const</span> book = contents.join(<span class="string">'\n\n---\n\n'</span>);
+console.log(<span class="string">`Combined ${contents.length} chapters`</span>);</code></pre>
+
+<p>
+  <code>Promise.all</code> preserves the order of the input array — <code>contents[0]</code> always corresponds
+  to <code>files[0]</code>, regardless of which file finished reading first.
+</p>
+
+<!-- ============================================ -->
+<h2>Anti-Pattern: <code>await</code> in a Loop</h2>
+
+<p>
+  This is the most common performance mistake in Node.js code:
+</p>
+
+<pre><code><span class="comment">// ❌ Sequential: each iteration waits for the previous to finish</span>
+<span class="keyword">for</span> (<span class="keyword">const</span> file <span class="keyword">of</span> files) {
+  <span class="keyword">const</span> data = <span class="keyword">await</span> <span class="function">readFile</span>(file, <span class="string">'utf8'</span>); <span class="comment">// blocks the loop!</span>
+  results.push(JSON.parse(data));
+}
+
+<span class="comment">// ✅ Concurrent: all reads start immediately</span>
+<span class="keyword">const</span> results = <span class="keyword">await</span> Promise.<span class="function">all</span>(
+  files.map(file => <span class="function">readFile</span>(file, <span class="string">'utf8'</span>).then(JSON.parse))
+);</code></pre>
+
+<div class="callout warning">
+  <strong>Exception:</strong> <code>await</code> in a loop is correct when operations have <strong>dependencies</strong> —
+  e.g., each iteration needs the result of the previous one, or you're deliberately
+  limiting concurrency. But for independent I/O operations (reading unrelated files),
+  it's always a mistake.
+</div>
+
+<!-- ============================================ -->
+<h2>Hands-On Exercise</h2>
+
+<p>
+  Create a script called <code>batch-reader.js</code> that:
+</p>
+<ol>
+  <li>Takes a directory path as argument: <code>node batch-reader.js ./config</code></li>
+  <li>Lists all <code>.json</code> files in that directory</li>
+  <li>Reads them all concurrently using <code>Promise.allSettled</code></li>
+  <li>Reports which files loaded successfully and which failed (invalid JSON or missing)</li>
+  <li>Outputs a merged config object from all successful reads</li>
+</ol>
+
+<pre><code><span class="comment">// Expected output:</span>
+<span class="comment">// ✓ Loaded: database.json, auth.json, features.json</span>
+<span class="comment">// ✗ Failed: broken.json (Unexpected token ...)</span>
+<span class="comment">// Merged config: { database: {...}, auth: {...}, features: {...} }</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">You need to read 5 required config files at startup. One missing file means the server can't start. Which do you use?</p>
+  <button class="quiz-option" data-index="0">Promise.allSettled — so you can report which files are missing</button>
+  <button class="quiz-option" data-index="1">Promise.all — one failure should abort the entire startup process</button>
+  <button class="quiz-option" data-index="2">Sequential await in a loop — to get clear error messages per file</button>
+  <button class="quiz-option" data-index="3">Promise.race — to fail fast on the first error encountered</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">What does <code>Promise.allSettled</code> return when 2 of 4 promises reject?</p>
+  <button class="quiz-option" data-index="0">An array of 4 objects with status 'fulfilled' or 'rejected' for each</button>
+  <button class="quiz-option" data-index="1">A rejected promise with the first error that occurred in the batch</button>
+  <button class="quiz-option" data-index="2">An array of 2 results — only the successful ones are included</button>
+  <button class="quiz-option" data-index="3">A resolved promise with the 2 successful values and undefined for failures</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">You have 5000 files to process. Using <code>Promise.all(files.map(f => readFile(f)))</code> might cause:</p>
+  <button class="quiz-option" data-index="0">A stack overflow because too many promises are created at once</button>
+  <button class="quiz-option" data-index="1">A deadlock because the event loop can't handle concurrent I/O</button>
+  <button class="quiz-option" data-index="2">EMFILE error — too many file descriptors open simultaneously</button>
+  <button class="quiz-option" data-index="3">Memory corruption from reading too many buffers in parallel</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">Does <code>Promise.all</code> guarantee the results array matches the input order?</p>
+  <button class="quiz-option" data-index="0">No — results are ordered by which promise resolved first (race order)</button>
+  <button class="quiz-option" data-index="1">Only if all promises resolve within the same event loop tick</button>
+  <button class="quiz-option" data-index="2">No — you need to use Promise.allSettled to preserve input order</button>
+  <button class="quiz-option" data-index="3">Yes — results[i] always corresponds to the input promise at index i</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<h2>Primary Sources</h2>
+<ul>
+  <li><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/all" target="_blank">MDN: Promise.all()</a></li>
+  <li><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/allSettled" target="_blank">MDN: Promise.allSettled()</a></li>
+  <li><a href="https://blog.openreplay.com/node-js-file-handling/" target="_blank">Modern File Handling in Node.js (OpenReplay, 2026)</a> — covers concurrent file patterns</li>
+  <li><a href="https://www.npmjs.com/package/p-limit" target="_blank">p-limit</a> — concurrency limiter for production use</li>
+</ul>
+
+<div class="followup">
+  <strong>Questions?</strong> Ask me about rate limiting file operations, how this applies to
+  concurrent database queries, the difference between <code>Promise.race</code> and <code>Promise.any</code>,
+  or how to handle partial failures gracefully in API responses. Final lesson next:
+  Security — path traversal prevention.
+</div>
+
+<div class="nav-links">
+  <a href="0006-directories-and-paths.html">← Lesson 6: Directories & Paths</a>
+  <a href="0008-security-path-traversal.html">Lesson 8: Security — Path Traversal →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 5: File Handles — Byte-Level Positional Access</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Lesson 05</p>
+<h1>File Handles & Byte-Level Access</h1>
+<p class="subtitle">When you need to read 16 bytes at offset 1024, or write to a specific position without touching the rest — file handles are the tool.</p>
+
+<!-- ============================================ -->
+<h2>When File Handles Make Sense</h2>
+
+<p>
+  You now know two approaches: <code>readFile</code> (whole file into memory) and streams (chunk-by-chunk).
+  File handles are the <strong>third</strong> option — the lowest-level one. They give you a direct
+  connection to the file where you control exactly <em>what bytes</em> to read, <em>from where</em>,
+  and <em>how many</em>.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Approach</th><th>Control Level</th><th>Best For</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>readFile / writeFile</code></td>
+      <td>Whole file at once</td>
+      <td>Small files, JSON configs</td>
+    </tr>
+    <tr>
+      <td>Streams + pipeline</td>
+      <td>Sequential chunks</td>
+      <td>Large files, transforms, HTTP responses</td>
+    </tr>
+    <tr>
+      <td><strong>File handles</strong></td>
+      <td>Specific bytes at specific positions</td>
+      <td>Binary headers, random access, partial updates</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Real-world scenarios for file handles:</h3>
+<ul>
+  <li><strong>Reading file headers</strong> — detect file type by reading first 4–16 bytes (magic numbers)</li>
+  <li><strong>Binary file formats</strong> — WAV audio, PNG images, database files with fixed-size records</li>
+  <li><strong>Partial updates</strong> — modify a specific record in a file without rewriting everything</li>
+  <li><strong>Resume downloads</strong> — write data at a specific byte offset for interrupted transfers</li>
+  <li><strong>Memory-mapped-like patterns</strong> — read only what you need from a massive file</li>
+</ul>
+
+<div class="callout">
+  <strong>For most full-stack work, you won't need file handles.</strong> <code>readFile</code> and streams
+  cover 95% of cases. But understanding handles makes you confident with binary formats,
+  file validation, and those rare cases where only positional access works.
+</div>
+
+<!-- ============================================ -->
+<h2>The Lifecycle: Open → Read/Write → Close</h2>
+
+<p>
+  A file handle is a low-level resource. You <strong>must</strong> manage its lifecycle:
+</p>
+
+<ol>
+  <li><strong>Open</strong> — <code>await open(path, flags)</code> → returns a <code>FileHandle</code></li>
+  <li><strong>Use</strong> — <code>handle.read()</code>, <code>handle.write()</code>, <code>handle.stat()</code></li>
+  <li><strong>Close</strong> — <code>await handle.close()</code> in a <code>finally</code> block</li>
+</ol>
+
+<pre><code><span class="keyword">import</span> { open } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">let</span> handle;
+<span class="keyword">try</span> {
+  handle = <span class="keyword">await</span> <span class="function">open</span>(<span class="string">'data.bin'</span>, <span class="string">'r'</span>);
+  <span class="comment">// ... use handle ...</span>
+} <span class="keyword">finally</span> {
+  <span class="keyword">await</span> handle?.<span class="function">close</span>();
+}</code></pre>
+
+<div class="callout danger">
+  <strong>Always close in <code>finally</code>.</strong> Forgetting to close leaks file descriptors.
+  Enough leaks → <code>EMFILE</code> (too many open files) → your server can't open any new files,
+  connections, or sockets. This is a common production incident.
+</div>
+
+<!-- ============================================ -->
+<h2>File Open Flags</h2>
+
+<p>The second argument to <code>open()</code> specifies what you plan to do with the file:</p>
+
+<table>
+  <thead>
+    <tr><th>Flag</th><th>Meaning</th><th>Creates if missing?</th><th>Truncates?</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>'r'</code></td><td>Read only</td><td>No (throws ENOENT)</td><td>No</td></tr>
+    <tr><td><code>'r+'</code></td><td>Read + write</td><td>No (throws ENOENT)</td><td>No</td></tr>
+    <tr><td><code>'w'</code></td><td>Write only</td><td>Yes</td><td>Yes (empties file)</td></tr>
+    <tr><td><code>'w+'</code></td><td>Read + write</td><td>Yes</td><td>Yes (empties file)</td></tr>
+    <tr><td><code>'a'</code></td><td>Append only</td><td>Yes</td><td>No</td></tr>
+    <tr><td><code>'a+'</code></td><td>Read + append</td><td>Yes</td><td>No</td></tr>
+  </tbody>
+</table>
+
+<p>
+  The most common for reading binary headers: <code>'r'</code>. For writing at specific positions: <code>'r+'</code>
+  (reads and writes without truncating the existing content).
+</p>
+
+<!-- ============================================ -->
+<h2>Reading at a Specific Position</h2>
+
+<p>
+  <code>handle.read(buffer, offset, length, position)</code> fills your pre-allocated buffer:
+</p>
+
+<ul>
+  <li><code>buffer</code> — a <code>Buffer</code> to fill with data</li>
+  <li><code>offset</code> — where in the buffer to start writing (usually 0)</li>
+  <li><code>length</code> — how many bytes to read</li>
+  <li><code>position</code> — where in the <strong>file</strong> to start reading (byte offset)</li>
+</ul>
+
+<pre><code><span class="keyword">import</span> { open } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">async function</span> <span class="function">readFileHeader</span>(path) {
+  <span class="keyword">let</span> handle;
+  <span class="keyword">try</span> {
+    handle = <span class="keyword">await</span> <span class="function">open</span>(path, <span class="string">'r'</span>);
+
+    <span class="comment">// Read the first 16 bytes (common header size)</span>
+    <span class="keyword">const</span> header = Buffer.alloc(<span class="number">16</span>);
+    <span class="keyword">const</span> { bytesRead } = <span class="keyword">await</span> handle.<span class="function">read</span>(header, <span class="number">0</span>, <span class="number">16</span>, <span class="number">0</span>);
+
+    console.log(<span class="string">`Read ${bytesRead} bytes`</span>);
+    console.log(<span class="string">'Header (hex):'</span>, header.toString(<span class="string">'hex'</span>));
+    console.log(<span class="string">'Header (ascii):'</span>, header.toString(<span class="string">'ascii'</span>));
+
+    <span class="keyword">return</span> header;
+  } <span class="keyword">finally</span> {
+    <span class="keyword">await</span> handle?.<span class="function">close</span>();
+  }
+}
+
+<span class="keyword">await</span> <span class="function">readFileHeader</span>(<span class="string">'photo.png'</span>);
+<span class="comment">// Header (hex): 89504e470d0a1a0a0000000d49484452</span>
+<span class="comment">// The first 8 bytes of any PNG: 89 50 4e 47 0d 0a 1a 0a</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Real-World Pattern: File Type Detection (Magic Numbers)</h2>
+
+<p>
+  Every binary file format starts with a "magic number" — specific bytes that identify the format.
+  This is how servers validate uploaded files (you can't trust the filename extension):
+</p>
+
+<pre><code><span class="keyword">import</span> { open } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">const</span> MAGIC_NUMBERS = {
+  png:  Buffer.from([<span class="number">0x89</span>, <span class="number">0x50</span>, <span class="number">0x4E</span>, <span class="number">0x47</span>]),
+  jpg:  Buffer.from([<span class="number">0xFF</span>, <span class="number">0xD8</span>, <span class="number">0xFF</span>]),
+  gif:  Buffer.from([<span class="number">0x47</span>, <span class="number">0x49</span>, <span class="number">0x46</span>]),
+  pdf:  Buffer.from([<span class="number">0x25</span>, <span class="number">0x50</span>, <span class="number">0x44</span>, <span class="number">0x46</span>]),
+  zip:  Buffer.from([<span class="number">0x50</span>, <span class="number">0x4B</span>, <span class="number">0x03</span>, <span class="number">0x04</span>]),
+};
+
+<span class="keyword">async function</span> <span class="function">detectFileType</span>(path) {
+  <span class="keyword">let</span> handle;
+  <span class="keyword">try</span> {
+    handle = <span class="keyword">await</span> <span class="function">open</span>(path, <span class="string">'r'</span>);
+    <span class="keyword">const</span> header = Buffer.alloc(<span class="number">4</span>);
+    <span class="keyword">await</span> handle.<span class="function">read</span>(header, <span class="number">0</span>, <span class="number">4</span>, <span class="number">0</span>);
+
+    <span class="keyword">for</span> (<span class="keyword">const</span> [type, magic] <span class="keyword">of</span> Object.entries(MAGIC_NUMBERS)) {
+      <span class="keyword">if</span> (header.subarray(<span class="number">0</span>, magic.length).equals(magic)) {
+        <span class="keyword">return</span> type;
+      }
+    }
+    <span class="keyword">return</span> <span class="string">'unknown'</span>;
+  } <span class="keyword">finally</span> {
+    <span class="keyword">await</span> handle?.<span class="function">close</span>();
+  }
+}
+
+console.log(<span class="keyword">await</span> <span class="function">detectFileType</span>(<span class="string">'upload.png'</span>)); <span class="comment">// 'png'</span>
+console.log(<span class="keyword">await</span> <span class="function">detectFileType</span>(<span class="string">'resume.pdf'</span>)); <span class="comment">// 'pdf'</span></code></pre>
+
+<div class="callout">
+  <strong>Why this matters for full-stack:</strong> When handling file uploads, never trust the
+  <code>Content-Type</code> header or file extension — both can be faked. Read the first few bytes
+  to verify the actual file format. This is a security pattern you'll use in Express/Fastify
+  upload handlers.
+</div>
+
+<!-- ============================================ -->
+<h2>Reading in Chunks (Manual Streaming)</h2>
+
+<p>
+  You can build your own chunked reader with file handles. This is useful when you need
+  something streams don't offer — like reading chunks from specific offsets:
+</p>
+
+<pre><code><span class="keyword">import</span> { open } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">async function</span> <span class="function">readInChunks</span>(path) {
+  <span class="keyword">let</span> handle;
+  <span class="keyword">try</span> {
+    handle = <span class="keyword">await</span> <span class="function">open</span>(path, <span class="string">'r'</span>);
+    <span class="keyword">const</span> chunkSize = <span class="number">64</span> * <span class="number">1024</span>; <span class="comment">// 64KB per read</span>
+    <span class="keyword">const</span> buffer = Buffer.alloc(chunkSize);
+    <span class="keyword">let</span> position = <span class="number">0</span>;
+    <span class="keyword">let</span> totalBytes = <span class="number">0</span>;
+
+    <span class="keyword">while</span> (<span class="keyword">true</span>) {
+      <span class="keyword">const</span> { bytesRead } = <span class="keyword">await</span> handle.<span class="function">read</span>(
+        buffer, <span class="number">0</span>, chunkSize, position
+      );
+      <span class="keyword">if</span> (bytesRead === <span class="number">0</span>) <span class="keyword">break</span>; <span class="comment">// EOF</span>
+
+      <span class="comment">// Process only the bytes actually read</span>
+      <span class="keyword">const</span> chunk = buffer.subarray(<span class="number">0</span>, bytesRead);
+      <span class="comment">// ... do something with chunk ...</span>
+
+      position += bytesRead;
+      totalBytes += bytesRead;
+    }
+
+    console.log(<span class="string">`Read ${totalBytes} bytes total`</span>);
+  } <span class="keyword">finally</span> {
+    <span class="keyword">await</span> handle?.<span class="function">close</span>();
+  }
+}</code></pre>
+
+<p>
+  Note: for most sequential reading, streams are simpler. Use file handles for chunked
+  reading only when you need <strong>positional control</strong> (jumping to specific offsets).
+</p>
+
+<!-- ============================================ -->
+<h2>Writing at a Specific Position</h2>
+
+<p>
+  <code>handle.write(buffer, offset, length, position)</code> writes bytes at an exact file offset:
+</p>
+
+<pre><code><span class="keyword">import</span> { open } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">async function</span> <span class="function">patchFile</span>(path, data, fileOffset) {
+  <span class="keyword">let</span> handle;
+  <span class="keyword">try</span> {
+    <span class="comment">// 'r+' = read/write without truncating</span>
+    handle = <span class="keyword">await</span> <span class="function">open</span>(path, <span class="string">'r+'</span>);
+    <span class="keyword">const</span> buffer = Buffer.from(data, <span class="string">'utf8'</span>);
+    <span class="keyword">const</span> { bytesWritten } = <span class="keyword">await</span> handle.<span class="function">write</span>(
+      buffer, <span class="number">0</span>, buffer.length, fileOffset
+    );
+    console.log(<span class="string">`Wrote ${bytesWritten} bytes at offset ${fileOffset}`</span>);
+  } <span class="keyword">finally</span> {
+    <span class="keyword">await</span> handle?.<span class="function">close</span>();
+  }
+}
+
+<span class="comment">// Overwrite bytes 10-14 with "HELLO"</span>
+<span class="keyword">await</span> <span class="function">patchFile</span>(<span class="string">'data.bin'</span>, <span class="string">'HELLO'</span>, <span class="number">10</span>);</code></pre>
+
+<div class="callout warning">
+  <strong>Important:</strong> Writing at a position <em>overwrites</em> the bytes there — it doesn't insert.
+  If your file has <code>AABBCCDD</code> and you write <code>XX</code> at position 2, you get <code>AAXXCCDD</code>,
+  not <code>AAXXBBCCDD</code>. Files don't support insert-in-the-middle — you'd have to rewrite
+  from that point forward.
+</div>
+
+<!-- ============================================ -->
+<h2>Real-World Pattern: Reading WAV Audio Duration</h2>
+
+<p>
+  WAV files have a fixed header structure. You can read the duration without loading
+  the audio data — just read the header bytes:
+</p>
+
+<pre><code><span class="keyword">import</span> { open } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">async function</span> <span class="function">getWavDuration</span>(path) {
+  <span class="keyword">let</span> handle;
+  <span class="keyword">try</span> {
+    handle = <span class="keyword">await</span> <span class="function">open</span>(path, <span class="string">'r'</span>);
+    <span class="keyword">const</span> header = Buffer.alloc(<span class="number">44</span>); <span class="comment">// WAV header is 44 bytes</span>
+    <span class="keyword">await</span> handle.<span class="function">read</span>(header, <span class="number">0</span>, <span class="number">44</span>, <span class="number">0</span>);
+
+    <span class="comment">// Verify it's a WAV file</span>
+    <span class="keyword">const</span> riff = header.toString(<span class="string">'ascii'</span>, <span class="number">0</span>, <span class="number">4</span>);
+    <span class="keyword">const</span> wave = header.toString(<span class="string">'ascii'</span>, <span class="number">8</span>, <span class="number">12</span>);
+    <span class="keyword">if</span> (riff !== <span class="string">'RIFF'</span> || wave !== <span class="string">'WAVE'</span>) {
+      <span class="keyword">throw new</span> Error(<span class="string">'Not a WAV file'</span>);
+    }
+
+    <span class="comment">// Extract fields using little-endian reads</span>
+    <span class="keyword">const</span> byteRate = header.readUInt32LE(<span class="number">28</span>);  <span class="comment">// bytes per second</span>
+    <span class="keyword">const</span> dataSize = header.readUInt32LE(<span class="number">40</span>); <span class="comment">// size of audio data</span>
+
+    <span class="keyword">const</span> durationSec = dataSize / byteRate;
+    console.log(<span class="string">`Duration: ${durationSec.toFixed(2)}s`</span>);
+    <span class="keyword">return</span> durationSec;
+  } <span class="keyword">finally</span> {
+    <span class="keyword">await</span> handle?.<span class="function">close</span>();
+  }
+}</code></pre>
+
+<p>
+  This reads only 44 bytes regardless of whether the audio file is 1MB or 1GB. That's
+  the power of positional access — you skip the data you don't need.
+</p>
+
+<!-- ============================================ -->
+<h2>The <code>FileHandle</code> API Surface</h2>
+
+<p>A <code>FileHandle</code> object gives you these methods:</p>
+
+<table>
+  <thead>
+    <tr><th>Method</th><th>What It Does</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>handle.read(buffer, offset, length, position)</code></td><td>Read bytes into buffer from file position</td></tr>
+    <tr><td><code>handle.write(buffer, offset, length, position)</code></td><td>Write bytes from buffer to file position</td></tr>
+    <tr><td><code>handle.stat()</code></td><td>Get file metadata (size, dates, etc.)</td></tr>
+    <tr><td><code>handle.truncate(len)</code></td><td>Shrink/grow file to exact size</td></tr>
+    <tr><td><code>handle.close()</code></td><td>Release the file descriptor</td></tr>
+    <tr><td><code>handle.readFile(options)</code></td><td>Convenience: read entire file (like fs.readFile)</td></tr>
+    <tr><td><code>handle.writeFile(data)</code></td><td>Convenience: write entire file (like fs.writeFile)</td></tr>
+    <tr><td><code>handle.createReadStream()</code></td><td>Create a readable stream from this handle</td></tr>
+    <tr><td><code>handle.createWriteStream()</code></td><td>Create a writable stream from this handle</td></tr>
+  </tbody>
+</table>
+
+<p>
+  Notice: <code>FileHandle</code> can also create streams and do whole-file operations. This lets
+  you mix approaches — open a handle, read the header manually, then create a stream
+  for the rest.
+</p>
+
+<!-- ============================================ -->
+<h2>The AbortController Pattern</h2>
+
+<p>
+  For long reads that might need cancellation (e.g., user navigates away, request times out):
+</p>
+
+<pre><code><span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'node:fs/promises'</span>;
+
+<span class="keyword">const</span> controller = <span class="keyword">new</span> AbortController();
+
+<span class="comment">// Cancel after 5 seconds</span>
+setTimeout(() => controller.<span class="function">abort</span>(), <span class="number">5000</span>);
+
+<span class="keyword">try</span> {
+  <span class="keyword">const</span> data = <span class="keyword">await</span> <span class="function">readFile</span>(<span class="string">'slow-network-file.bin'</span>, {
+    signal: controller.signal,
+  });
+} <span class="keyword">catch</span> (err) {
+  <span class="keyword">if</span> (err.name === <span class="string">'AbortError'</span>) {
+    console.log(<span class="string">'Read cancelled — took too long'</span>);
+  } <span class="keyword">else</span> {
+    <span class="keyword">throw</span> err;
+  }
+}</code></pre>
+
+<p>
+  <code>AbortSignal</code> is supported by <code>readFile</code> and <code>fs.watch</code>. You already know
+  <code>AbortController</code> from the Fetch API in the browser — same pattern here.
+</p>
+
+<!-- ============================================ -->
+<h2>Hands-On Exercise</h2>
+
+<p>
+  Create a script called <code>detect-type.js</code> that reads the first 4 bytes of a file
+  and detects whether it's a PNG, JPEG, PDF, or ZIP:
+</p>
+
+<pre><code><span class="comment">// Usage: node detect-type.js myfile.png</span>
+<span class="comment">// Output: "myfile.png is a PNG file"</span></code></pre>
+
+<p>Steps:</p>
+<ol>
+  <li>Get the filename from <code>process.argv[2]</code></li>
+  <li>Open the file with <code>open(path, 'r')</code></li>
+  <li>Allocate a 4-byte Buffer</li>
+  <li>Read 4 bytes at position 0</li>
+  <li>Compare against known magic numbers</li>
+  <li>Close the handle in <code>finally</code></li>
+</ol>
+
+<p>Test with files you already have, or create test files:</p>
+<pre><code><span class="comment"># Download a test PNG</span>
+curl -o test.png https://www.google.com/favicon.ico
+node detect-type.js test.png</code></pre>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">What happens if you forget to call <code>handle.close()</code> on file handles in a server?</p>
+  <button class="quiz-option" data-index="0">The file becomes locked and no other process can access it</button>
+  <button class="quiz-option" data-index="1">Node.js automatically closes handles when garbage collection runs</button>
+  <button class="quiz-option" data-index="2">The handle is closed when the current async function completes</button>
+  <button class="quiz-option" data-index="3">File descriptors leak until EMFILE — then nothing can open files</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">You need to modify 4 bytes at position 200 in a file without affecting the rest. Which flag do you use with <code>open()</code>?</p>
+  <button class="quiz-option" data-index="0">'w' — to open for writing and create if missing</button>
+  <button class="quiz-option" data-index="1">'r+' — to read and write without truncating</button>
+  <button class="quiz-option" data-index="2">'a' — to append data at the current position</button>
+  <button class="quiz-option" data-index="3">'w+' — to enable both reading and writing operations</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">Why is reading magic numbers from uploaded files a security practice?</p>
+  <button class="quiz-option" data-index="0">Magic numbers encrypt the file content against tampering</button>
+  <button class="quiz-option" data-index="1">The OS refuses to open files without valid magic numbers</button>
+  <button class="quiz-option" data-index="2">File extensions and Content-Type headers can be faked by attackers</button>
+  <button class="quiz-option" data-index="3">Magic numbers prevent path traversal attacks on the file system</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<h2>Primary Sources</h2>
+<ul>
+  <li><a href="https://nodejs.org/api/fs.html#fspromisesopenpath-flags-mode" target="_blank">Node.js <code>open()</code> documentation</a></li>
+  <li><a href="https://nodejs.org/api/fs.html#class-filehandle" target="_blank">Node.js <code>FileHandle</code> class API</a></li>
+  <li><a href="https://nodejsdesignpatterns.com/blog/reading-writing-files-nodejs" target="_blank">Reading and Writing Files in Node.js (Node.js Design Patterns, 2025)</a> — comprehensive guide covering handles, streams, and promises</li>
+  <li><a href="https://en.wikipedia.org/wiki/List_of_file_signatures" target="_blank">Wikipedia: List of file signatures (magic numbers)</a></li>
+</ul>
+
+<div class="followup">
+  <strong>Questions?</strong> Ask me about parsing specific binary formats (PNG dimensions, MP3 headers),
+  how to implement resume-capable downloads, or how file handles relate to database storage engines.
+  Next up: Directories, paths & <code>import.meta.dirname</code>.
+</div>
+
+<div class="nav-links">
+  <a href="0004-streams-and-pipeline.html">← Lesson 4: Streams & Pipeline</a>
+  <a href="0006-directories-and-paths.html">Lesson 6: Directories & Paths →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

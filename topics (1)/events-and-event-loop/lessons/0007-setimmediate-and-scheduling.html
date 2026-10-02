@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Events Lesson 7: setImmediate — Scheduling and EventEmitter</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Events — Lesson 07</p>
+<h1>setImmediate, setTimeout &amp; setInterval</h1>
+<p class="subtitle">Three scheduling APIs, three different behaviors. Why setImmediate is essential for EventEmitter patterns.</p>
+
+<!-- ============================================ -->
+<h2>The Three Scheduling APIs</h2>
+
+<p>Node.js gives you three ways to schedule code to run "later":</p>
+
+<table>
+  <thead>
+    <tr><th>API</th><th>What it does</th><th>Event loop phase</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>setTimeout(fn, ms)</code></td>
+      <td>Run <code>fn</code> once, after at least <code>ms</code> milliseconds</td>
+      <td><strong>Timers</strong> phase</td>
+    </tr>
+    <tr>
+      <td><code>setInterval(fn, ms)</code></td>
+      <td>Run <code>fn</code> repeatedly, every <code>ms</code> milliseconds</td>
+      <td><strong>Timers</strong> phase</td>
+    </tr>
+    <tr>
+      <td><code>setImmediate(fn)</code></td>
+      <td>Run <code>fn</code> once, as soon as the current I/O cycle completes</td>
+      <td><strong>Check</strong> phase</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  They live in different event loop phases. Recall from
+  <a href="0002-event-loop-phases.html">Lesson 2</a>:
+</p>
+
+<pre><code><span class="comment">// Event loop phase order:</span>
+<span class="comment">// timers → pending → idle → poll → check → close</span>
+<span class="comment">//   ↑ setTimeout/setInterval          ↑ setImmediate</span></code></pre>
+
+<!-- ============================================ -->
+<h2>setTimeout vs setImmediate: The Subtle Difference</h2>
+
+<p>
+  <code>setTimeout(fn, 0)</code> and <code>setImmediate(fn)</code> seem identical — "run this ASAP."
+  But their behavior depends on <strong>where you call them from</strong>:
+</p>
+
+<h3>Called from the main module (top-level)</h3>
+
+<pre><code><span class="comment">// Order is NON-DETERMINISTIC at top level</span>
+setTimeout(() => console.log(<span class="string">'timeout'</span>), <span class="number">0</span>);
+setImmediate(() => console.log(<span class="string">'immediate'</span>));
+
+<span class="comment">// Could print either order! Depends on system timer resolution.</span>
+<span class="comment">// Sometimes: timeout → immediate</span>
+<span class="comment">// Sometimes: immediate → timeout</span></code></pre>
+
+<p>
+  Why? <code>setTimeout(fn, 0)</code> actually means "after at least 1ms" (minimum timer granularity).
+  If the event loop starts fast enough, it enters the timers phase before 1ms has elapsed,
+  finds nothing, moves to poll, then check (runs setImmediate). But if system load causes
+  a tiny delay, the timer may already be expired.
+</p>
+
+<h3>Called inside an I/O callback</h3>
+
+<pre><code><span class="keyword">import</span> { readFile } <span class="keyword">from</span> <span class="string">'node:fs'</span>;
+
+readFile(<span class="string">'./package.json'</span>, () => {
+  setTimeout(() => console.log(<span class="string">'timeout'</span>), <span class="number">0</span>);
+  setImmediate(() => console.log(<span class="string">'immediate'</span>));
+});
+
+<span class="comment">// ALWAYS prints:</span>
+<span class="comment">// immediate</span>
+<span class="comment">// timeout</span></code></pre>
+
+<p>
+  Inside an I/O callback, you're in the <strong>poll phase</strong>. The next phase is <strong>check</strong>
+  (where setImmediate lives). The timers phase comes around on the <em>next</em> iteration.
+  So setImmediate always fires first here.
+</p>
+
+<div class="callout">
+  <strong>Rule of thumb:</strong> Inside I/O callbacks, <code>setImmediate</code> always beats <code>setTimeout(fn, 0)</code>.
+  At top-level, order is unpredictable. This is documented in the
+  <a href="https://nodejs.org/learn/asynchronous-work/understanding-setimmediate" target="_blank">official Node.js setImmediate guide</a>.
+</div>
+
+<!-- ============================================ -->
+<h2>Why setImmediate Matters for EventEmitter</h2>
+
+<p>
+  Here's the critical EventEmitter problem that <code>setImmediate</code> solves:
+  <strong>emitting an event before listeners are attached.</strong>
+</p>
+
+<h3>The broken pattern</h3>
+
+<pre><code><span class="keyword">import</span> { EventEmitter } <span class="keyword">from</span> <span class="string">'node:events'</span>;
+
+<span class="keyword">class</span> <span class="function">DataLoader</span> <span class="keyword">extends</span> EventEmitter {
+  <span class="function">constructor</span>(url) {
+    <span class="keyword">super</span>();
+    <span class="comment">// ❌ BUG: emitting in the constructor</span>
+    <span class="keyword">this</span>.<span class="function">emit</span>(<span class="string">'ready'</span>, { url });
+  }
+}
+
+<span class="comment">// The listener is attached AFTER the constructor runs</span>
+<span class="keyword">const</span> loader = <span class="keyword">new</span> <span class="function">DataLoader</span>(<span class="string">'https://api.example.com'</span>);
+loader.<span class="function">on</span>(<span class="string">'ready'</span>, (data) => {
+  console.log(<span class="string">'Ready!'</span>, data); <span class="comment">// ← NEVER fires!</span>
+});</code></pre>
+
+<p>
+  The emit happens <em>synchronously</em> inside the constructor. At that point, <code>loader.on('ready', ...)</code>
+  hasn't been called yet — the constructor must return before you can add listeners to the instance.
+</p>
+
+<h3>The fix: defer with setImmediate</h3>
+
+<pre><code><span class="keyword">class</span> <span class="function">DataLoader</span> <span class="keyword">extends</span> EventEmitter {
+  <span class="function">constructor</span>(url) {
+    <span class="keyword">super</span>();
+    <span class="comment">// ✅ Defer the emit to the check phase</span>
+    setImmediate(() => {
+      <span class="keyword">this</span>.<span class="function">emit</span>(<span class="string">'ready'</span>, { url });
+    });
+  }
+}
+
+<span class="keyword">const</span> loader = <span class="keyword">new</span> <span class="function">DataLoader</span>(<span class="string">'https://api.example.com'</span>);
+loader.<span class="function">on</span>(<span class="string">'ready'</span>, (data) => {
+  console.log(<span class="string">'Ready!'</span>, data); <span class="comment">// ✅ NOW it fires</span>
+});</code></pre>
+
+<p>
+  <code>setImmediate</code> pushes the emit to the <strong>check phase</strong> — after all synchronous code
+  in the current execution finishes. By then, <code>.on('ready', ...)</code> has already been registered.
+</p>
+
+<div class="callout">
+  <strong>This is a real Node.js core pattern.</strong> The <code>net.Server</code> class uses this exact technique —
+  it defers certain events so you have time to attach listeners after calling the constructor.
+  You'll see this everywhere in Node.js source code.
+</div>
+
+<!-- ============================================ -->
+<h2>Why Not process.nextTick Instead?</h2>
+
+<p>
+  You <em>could</em> use <code>process.nextTick</code> for the same purpose — it also defers execution past
+  the current synchronous code. But there's an important difference:
+</p>
+
+<table>
+  <thead>
+    <tr><th></th><th><code>setImmediate</code></th><th><code>process.nextTick</code></th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Runs in</strong></td>
+      <td>Check phase (macrotask)</td>
+      <td>Between phases (microtask)</td>
+    </tr>
+    <tr>
+      <td><strong>I/O starvation risk</strong></td>
+      <td>No — I/O callbacks run first (poll phase)</td>
+      <td>Yes — recursive nextTick blocks I/O forever</td>
+    </tr>
+    <tr>
+      <td><strong>Use case</strong></td>
+      <td>Yield to the event loop, let I/O flow</td>
+      <td>Run before any I/O (rare, careful use)</td>
+    </tr>
+  </tbody>
+</table>
+
+<pre><code><span class="comment">// ❌ Dangerous: recursive nextTick starves I/O</span>
+<span class="keyword">function</span> <span class="function">recurse</span>() {
+  process.<span class="function">nextTick</span>(recurse); <span class="comment">// I/O callbacks never run!</span>
+}
+
+<span class="comment">// ✅ Safe: recursive setImmediate yields to I/O each iteration</span>
+<span class="keyword">function</span> <span class="function">recurse</span>() {
+  setImmediate(recurse); <span class="comment">// I/O callbacks run between iterations</span>
+}</code></pre>
+
+<p>
+  For the constructor pattern, both work. But <code>setImmediate</code> is the safer default
+  because it won't starve I/O if something unexpected happens.
+</p>
+
+<!-- ============================================ -->
+<h2>setInterval: The Repeating Timer</h2>
+
+<p>
+  <code>setInterval</code> is simply <code>setTimeout</code> that re-schedules itself:
+</p>
+
+<pre><code><span class="comment">// Runs handler every 5 seconds</span>
+<span class="keyword">const</span> intervalId = setInterval(() => {
+  console.log(<span class="string">'Health check at'</span>, <span class="keyword">new</span> Date().toISOString());
+}, <span class="number">5000</span>);
+
+<span class="comment">// Stop it later</span>
+clearInterval(intervalId);</code></pre>
+
+<p><strong>Key behaviors:</strong></p>
+<ul>
+  <li>If a callback takes longer than the interval, calls will <strong>stack up</strong> — never overlap (they wait), but drift accumulates</li>
+  <li>Like setTimeout, the delay is a <em>minimum</em> — if the event loop is busy, it fires late</li>
+  <li>An uncancelled interval keeps the process alive forever (useful for servers, annoying in scripts)</li>
+</ul>
+
+<h3>setInterval vs recursive setTimeout</h3>
+
+<pre><code><span class="comment">// setInterval: fixed delay BETWEEN START of each call</span>
+<span class="comment">// If handler takes 200ms, next call is only 800ms after handler finishes (for 1000ms interval)</span>
+setInterval(handler, <span class="number">1000</span>);
+
+<span class="comment">// recursive setTimeout: fixed delay AFTER END of each call</span>
+<span class="comment">// Always exactly 1000ms of rest between calls, regardless of handler duration</span>
+<span class="keyword">function</span> <span class="function">loop</span>() {
+  <span class="function">handler</span>();
+  setTimeout(loop, <span class="number">1000</span>);
+}
+<span class="function">loop</span>();</code></pre>
+
+<p>
+  For production health checks, polling, or retry logic: prefer <strong>recursive setTimeout</strong>
+  so a slow handler doesn't cause drift.
+</p>
+
+<!-- ============================================ -->
+<h2>Practical Summary: Which to Use When</h2>
+
+<table>
+  <thead>
+    <tr><th>Scenario</th><th>Use</th><th>Why</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Defer emit in constructor</td>
+      <td><code>setImmediate</code></td>
+      <td>Lets listeners attach first, doesn't block I/O</td>
+    </tr>
+    <tr>
+      <td>Chunk CPU-heavy work</td>
+      <td><code>setImmediate</code></td>
+      <td>Yields to I/O between chunks (<a href="0004-blocking-and-performance.html">Lesson 4</a>)</td>
+    </tr>
+    <tr>
+      <td>Delay something by N ms</td>
+      <td><code>setTimeout</code></td>
+      <td>Timer-based scheduling with minimum delay</td>
+    </tr>
+    <tr>
+      <td>Repeat something every N ms</td>
+      <td><code>setInterval</code> or recursive <code>setTimeout</code></td>
+      <td>Periodic tasks (prefer recursive setTimeout for precision)</td>
+    </tr>
+    <tr>
+      <td>Run before any pending I/O</td>
+      <td><code>process.nextTick</code></td>
+      <td>Rare — use when you must run before the loop continues</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>Try It: The Constructor Problem</h2>
+
+<p>Run this in your <code>code/</code> directory to see the bug and the fix:</p>
+
+<pre><code><span class="comment">// scheduling-test.js</span>
+<span class="keyword">import</span> { EventEmitter } <span class="keyword">from</span> <span class="string">'node:events'</span>;
+
+<span class="comment">// ❌ Broken: emit in constructor</span>
+<span class="keyword">class</span> <span class="function">BrokenLoader</span> <span class="keyword">extends</span> EventEmitter {
+  <span class="function">constructor</span>() {
+    <span class="keyword">super</span>();
+    <span class="keyword">this</span>.<span class="function">emit</span>(<span class="string">'ready'</span>, <span class="string">'data loaded'</span>);
+  }
+}
+
+<span class="keyword">const</span> broken = <span class="keyword">new</span> <span class="function">BrokenLoader</span>();
+broken.<span class="function">on</span>(<span class="string">'ready'</span>, (msg) => console.log(<span class="string">'Broken heard:'</span>, msg));
+<span class="comment">// Nothing prints!</span>
+
+<span class="comment">// ✅ Fixed: defer with setImmediate</span>
+<span class="keyword">class</span> <span class="function">FixedLoader</span> <span class="keyword">extends</span> EventEmitter {
+  <span class="function">constructor</span>() {
+    <span class="keyword">super</span>();
+    setImmediate(() => <span class="keyword">this</span>.<span class="function">emit</span>(<span class="string">'ready'</span>, <span class="string">'data loaded'</span>));
+  }
+}
+
+<span class="keyword">const</span> fixed = <span class="keyword">new</span> <span class="function">FixedLoader</span>();
+fixed.<span class="function">on</span>(<span class="string">'ready'</span>, (msg) => console.log(<span class="string">'Fixed heard:'</span>, msg));
+<span class="comment">// Prints: Fixed heard: data loaded</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">Inside an I/O callback (e.g., fs.readFile), you call both setTimeout(fn, 0) and setImmediate(fn). Which fires first?</p>
+  <button class="quiz-option" data-index="0">setTimeout always fires first because it has a 0ms delay specified</button>
+  <button class="quiz-option" data-index="1">The order is non-deterministic and depends on system timer speed</button>
+  <button class="quiz-option" data-index="2">setImmediate always fires first because check comes before timers</button>
+  <button class="quiz-option" data-index="3">They fire simultaneously since both are scheduled for "right now"</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">You emit an event inside a constructor but the listener never fires. What's the root cause?</p>
+  <button class="quiz-option" data-index="0">emit() runs synchronously before listeners can be attached to the instance</button>
+  <button class="quiz-option" data-index="1">Constructors cannot call inherited methods like emit() from a parent class</button>
+  <button class="quiz-option" data-index="2">EventEmitter silently drops events if no listeners are registered yet</button>
+  <button class="quiz-option" data-index="3">The event name is scoped to the constructor and not visible outside</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">Why is recursive process.nextTick() dangerous but recursive setImmediate() is safe?</p>
+  <button class="quiz-option" data-index="0">nextTick allocates more memory per call due to its microtask queue design</button>
+  <button class="quiz-option" data-index="1">nextTick drains fully before I/O runs, starving other callbacks forever</button>
+  <button class="quiz-option" data-index="2">setImmediate automatically pauses after 1000 recursive calls per second</button>
+  <button class="quiz-option" data-index="3">nextTick is deprecated in Node.js v20+ and throws after 100 recursions</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<h2>Primary Source</h2>
+
+<p>
+  Read the official Node.js documentation on setImmediate:
+  <a href="https://nodejs.org/learn/asynchronous-work/understanding-setimmediate" target="_blank">Understanding setImmediate() — Node.js</a>.
+  For the full timers API reference, see
+  <a href="https://nodejs.org/api/timers.html" target="_blank">Node.js Timers API Docs</a>.
+</p>
+
+<!-- ============================================ -->
+<p class="ask-agent">
+  💬 Questions? Ask your agent: "Show me how Node.js core uses setImmediate internally" or "What happens if I use process.nextTick instead of setImmediate in the constructor pattern?"
+</p>
+
+<div class="nav-links">
+  <a href="0006-event-driven-decoupling.html">← Lesson 6: Event-Driven Decoupling</a>
+  <a href="../reference/events-cheatsheet.html">Events Cheatsheet →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

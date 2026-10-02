@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 2: Worker Threads — CPU-Heavy Work Without Blocking</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Processes — Lesson 02</p>
+<h1>Worker Threads</h1>
+<p class="subtitle">Run CPU-intensive JavaScript in parallel without spawning a new OS process.</p>
+
+<!-- ============================================ -->
+<h2>Worker Threads vs Child Processes</h2>
+
+<table>
+  <thead>
+    <tr><th>Aspect</th><th>Child Process</th><th>Worker Thread</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Isolation</td><td>Separate OS process, own memory</td><td>Same process, shared memory possible</td></tr>
+    <tr><td>Startup cost</td><td>Heavy (~30ms+ to spawn)</td><td>Lighter (~5ms to create)</td></tr>
+    <tr><td>Communication</td><td>IPC (serialized messages) or stdio</td><td>Messages + SharedArrayBuffer</td></tr>
+    <tr><td>Can run</td><td>Any language/binary</td><td>Only JavaScript/WASM</td></tr>
+    <tr><td>Crash behavior</td><td>Child crashes, parent survives</td><td>Worker crash can be caught by parent</td></tr>
+    <tr><td>Use for</td><td>External programs, shell commands, isolation</td><td>CPU-bound JS: parsing, crypto, image processing</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <strong>Rule of thumb:</strong> Use Worker Threads when you need to run JavaScript/TypeScript
+  that's CPU-heavy. Use Child Processes when you need to run external programs or
+  need full process isolation.
+</div>
+
+<!-- ============================================ -->
+<h2>Basic Worker Thread Pattern</h2>
+
+<pre><code><span class="comment">// main.js</span>
+<span class="keyword">import</span> { Worker } <span class="keyword">from</span> <span class="string">'node:worker_threads'</span>;
+
+<span class="keyword">function</span> <span class="function">runWorker</span>(data) {
+  <span class="keyword">return new</span> Promise((resolve, reject) => {
+    <span class="keyword">const</span> worker = <span class="keyword">new</span> <span class="function">Worker</span>(<span class="string">'./heavy-task.js'</span>, {
+      workerData: data,
+    });
+
+    worker.<span class="function">on</span>(<span class="string">'message'</span>, resolve);
+    worker.<span class="function">on</span>(<span class="string">'error'</span>, reject);
+    worker.<span class="function">on</span>(<span class="string">'exit'</span>, (code) => {
+      <span class="keyword">if</span> (code !== <span class="number">0</span>) {
+        reject(<span class="keyword">new</span> Error(<span class="string">`Worker exited with code ${code}`</span>));
+      }
+    });
+  });
+}
+
+<span class="comment">// Use it in your HTTP handler without blocking:</span>
+<span class="keyword">const</span> result = <span class="keyword">await</span> <span class="function">runWorker</span>({ numbers: [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>] });
+console.log(result);</code></pre>
+
+<pre><code><span class="comment">// heavy-task.js</span>
+<span class="keyword">import</span> { parentPort, workerData } <span class="keyword">from</span> <span class="string">'node:worker_threads'</span>;
+
+<span class="comment">// This runs on a SEPARATE thread — doesn't block the event loop</span>
+<span class="keyword">function</span> <span class="function">heavyComputation</span>(numbers) {
+  <span class="comment">// Simulate CPU-intensive work</span>
+  <span class="keyword">let</span> sum = <span class="number">0</span>;
+  <span class="keyword">for</span> (<span class="keyword">let</span> i = <span class="number">0</span>; i < <span class="number">1_000_000_000</span>; i++) {
+    sum += numbers[i % numbers.length];
+  }
+  <span class="keyword">return</span> sum;
+}
+
+<span class="keyword">const</span> result = <span class="function">heavyComputation</span>(workerData.numbers);
+parentPort.<span class="function">postMessage</span>(result);</code></pre>
+
+<!-- ============================================ -->
+<h2>Inline Workers (No Separate File)</h2>
+
+<p>For small tasks, create a worker from inline code:</p>
+
+<pre><code><span class="keyword">import</span> { Worker } <span class="keyword">from</span> <span class="string">'node:worker_threads'</span>;
+
+<span class="keyword">function</span> <span class="function">runInline</span>(fn, data) {
+  <span class="keyword">return new</span> Promise((resolve, reject) => {
+    <span class="keyword">const</span> worker = <span class="keyword">new</span> <span class="function">Worker</span>(
+      <span class="string">`
+      const { parentPort, workerData } = require('worker_threads');
+      const fn = ${fn.toString()};
+      const result = fn(workerData);
+      parentPort.postMessage(result);
+      `</span>,
+      { eval: <span class="keyword">true</span>, workerData: data }
+    );
+    worker.<span class="function">on</span>(<span class="string">'message'</span>, resolve);
+    worker.<span class="function">on</span>(<span class="string">'error'</span>, reject);
+  });
+}
+
+<span class="keyword">const</span> result = <span class="keyword">await</span> <span class="function">runInline</span>(
+  (data) => data.reduce((a, b) => a + b, <span class="number">0</span>),
+  [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>]
+);
+console.log(result); <span class="comment">// 15</span></code></pre>
+
+<!-- ============================================ -->
+<h2>SharedArrayBuffer — True Shared Memory</h2>
+
+<p>Workers can share memory with the main thread for zero-copy data passing:</p>
+
+<pre><code><span class="comment">// main.js</span>
+<span class="keyword">import</span> { Worker } <span class="keyword">from</span> <span class="string">'node:worker_threads'</span>;
+
+<span class="keyword">const</span> sharedBuffer = <span class="keyword">new</span> SharedArrayBuffer(<span class="number">4</span>); <span class="comment">// 4 bytes</span>
+<span class="keyword">const</span> view = <span class="keyword">new</span> Int32Array(sharedBuffer);
+view[<span class="number">0</span>] = <span class="number">0</span>; <span class="comment">// initial counter value</span>
+
+<span class="keyword">const</span> worker = <span class="keyword">new</span> <span class="function">Worker</span>(<span class="string">'./counter-worker.js'</span>, {
+  workerData: { sharedBuffer },
+});
+
+<span class="comment">// Both main thread and worker see the same memory</span>
+setTimeout(() => {
+  console.log(<span class="string">'Counter from main:'</span>, view[<span class="number">0</span>]); <span class="comment">// modified by worker!</span>
+}, <span class="number">1000</span>);
+
+<span class="comment">// counter-worker.js</span>
+<span class="keyword">import</span> { workerData } <span class="keyword">from</span> <span class="string">'node:worker_threads'</span>;
+<span class="keyword">const</span> view = <span class="keyword">new</span> Int32Array(workerData.sharedBuffer);
+<span class="keyword">for</span> (<span class="keyword">let</span> i = <span class="number">0</span>; i < <span class="number">1000</span>; i++) {
+  Atomics.<span class="function">add</span>(view, <span class="number">0</span>, <span class="number">1</span>); <span class="comment">// thread-safe increment</span>
+}</code></pre>
+
+<div class="callout warning">
+  <strong>Shared memory requires <code>Atomics</code></strong> for safe access. Without atomic operations,
+  you get race conditions. For most use cases, message passing (<code>postMessage</code>) is safer
+  and easier.
+</div>
+
+<!-- ============================================ -->
+<h2>Worker Pool Pattern</h2>
+
+<p>Creating a worker per request is expensive. Use a pool:</p>
+
+<pre><code><span class="keyword">import</span> { Worker } <span class="keyword">from</span> <span class="string">'node:worker_threads'</span>;
+<span class="keyword">import</span> os <span class="keyword">from</span> <span class="string">'node:os'</span>;
+
+<span class="keyword">class</span> <span class="function">WorkerPool</span> {
+  <span class="function">constructor</span>(workerPath, size = os.cpus().length) {
+    <span class="keyword">this</span>.workers = [];
+    <span class="keyword">this</span>.queue = [];
+    <span class="keyword">for</span> (<span class="keyword">let</span> i = <span class="number">0</span>; i < size; i++) {
+      <span class="keyword">this</span>.<span class="function">addWorker</span>(workerPath);
+    }
+  }
+
+  <span class="function">addWorker</span>(path) {
+    <span class="keyword">const</span> worker = <span class="keyword">new</span> <span class="function">Worker</span>(path);
+    worker.busy = <span class="keyword">false</span>;
+    worker.<span class="function">on</span>(<span class="string">'message'</span>, (result) => {
+      worker.busy = <span class="keyword">false</span>;
+      worker.resolve(result);
+      <span class="keyword">this</span>.<span class="function">processQueue</span>();
+    });
+    <span class="keyword">this</span>.workers.push(worker);
+  }
+
+  <span class="function">run</span>(data) {
+    <span class="keyword">return new</span> Promise((resolve, reject) => {
+      <span class="keyword">const</span> idle = <span class="keyword">this</span>.workers.find(w => !w.busy);
+      <span class="keyword">if</span> (idle) {
+        idle.busy = <span class="keyword">true</span>;
+        idle.resolve = resolve;
+        idle.<span class="function">postMessage</span>(data);
+      } <span class="keyword">else</span> {
+        <span class="keyword">this</span>.queue.push({ data, resolve, reject });
+      }
+    });
+  }
+
+  <span class="function">processQueue</span>() {
+    <span class="keyword">if</span> (<span class="keyword">this</span>.queue.length === <span class="number">0</span>) <span class="keyword">return</span>;
+    <span class="keyword">const</span> idle = <span class="keyword">this</span>.workers.find(w => !w.busy);
+    <span class="keyword">if</span> (!idle) <span class="keyword">return</span>;
+    <span class="keyword">const</span> { data, resolve } = <span class="keyword">this</span>.queue.shift();
+    idle.busy = <span class="keyword">true</span>;
+    idle.resolve = resolve;
+    idle.<span class="function">postMessage</span>(data);
+  }
+}</code></pre>
+
+<p>Production alternative: use the <a href="https://www.npmjs.com/package/piscina" target="_blank"><code>piscina</code></a> package — a battle-tested worker pool.</p>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">When should you use Worker Threads instead of child processes?</p>
+  <button class="quiz-option" data-index="0">When you need to run CPU-heavy JavaScript without spawning a new OS process</button>
+  <button class="quiz-option" data-index="1">When you need to run Python scripts alongside your Node.js server</button>
+  <button class="quiz-option" data-index="2">When you need full process isolation to prevent crashes from propagating</button>
+  <button class="quiz-option" data-index="3">When you need to execute shell commands with pipes and redirections</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">What is the safest way to pass data between the main thread and a Worker Thread?</p>
+  <button class="quiz-option" data-index="0">Global variables — both threads share the same V8 heap automatically</button>
+  <button class="quiz-option" data-index="1">Reading and writing to the same file from both threads simultaneously</button>
+  <button class="quiz-option" data-index="2">SharedArrayBuffer without any synchronization primitives for speed</button>
+  <button class="quiz-option" data-index="3">Message passing with postMessage() — data is cloned, no shared state</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="nav-links">
+  <a href="0001-child-process-overview.html">← Lesson 1: Child Processes</a>
+  <a href="0003-cluster-module.html">Lesson 3: Cluster Module →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

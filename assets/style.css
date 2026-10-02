@@ -1,0 +1,173 @@
+/* Teaching workspace shared stylesheet */
+:root {
+  --font-body: 'Georgia', serif;
+  --font-code: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  --color-bg: #fefefe;
+  --color-text: #2c2c2c;
+  --color-muted: #666;
+  --color-accent: #1a73e8;
+  --color-accent-light: #e8f0fe;
+  --color-success: #1e8e3e;
+  --color-error: #d93025;
+  --color-warning: #f9ab00;
+  --color-code-bg: #f5f5f5;
+  --color-border: #e0e0e0;
+  --max-width: 720px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font-body);
+  color: var(--color-text);
+  background: var(--color-bg);
+  line-height: 1.7;
+  padding: 3rem 1.5rem;
+  max-width: var(--max-width);
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 2rem;
+  margin-bottom: 0.25rem;
+  letter-spacing: -0.5px;
+}
+
+h2 {
+  font-size: 1.4rem;
+  margin-top: 2.5rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 0.25rem;
+}
+
+h3 {
+  font-size: 1.15rem;
+  margin-top: 1.75rem;
+  margin-bottom: 0.5rem;
+}
+
+p { margin-bottom: 1rem; }
+
+.subtitle {
+  color: var(--color-muted);
+  font-size: 1rem;
+  margin-bottom: 2rem;
+}
+
+code {
+  font-family: var(--font-code);
+  font-size: 0.88rem;
+  background: var(--color-code-bg);
+  padding: 0.15em 0.4em;
+  border-radius: 3px;
+}
+
+pre {
+  background: #1e1e2e;
+  color: #cdd6f4;
+  padding: 1.25rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 1rem 0 1.5rem;
+  line-height: 1.5;
+}
+
+pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+  font-size: 0.85rem;
+}
+
+.keyword { color: #cba6f7; }
+.string { color: #a6e3a1; }
+.comment { color: #6c7086; font-style: italic; }
+.function { color: #89b4fa; }
+.number { color: #fab387; }
+.operator { color: #89dceb; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0 1.5rem;
+  font-size: 0.92rem;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+th {
+  background: var(--color-code-bg);
+  font-weight: 600;
+}
+
+.callout {
+  border-left: 4px solid var(--color-accent);
+  background: var(--color-accent-light);
+  padding: 1rem 1.25rem;
+  margin: 1.25rem 0;
+  border-radius: 0 4px 4px 0;
+}
+
+.callout.warning {
+  border-color: var(--color-warning);
+  background: #fef7e0;
+}
+
+.callout.danger {
+  border-color: var(--color-error);
+  background: #fce8e6;
+}
+
+.callout strong {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+a:hover { text-decoration: underline; }
+
+ul, ol {
+  margin: 0.5rem 0 1rem 1.5rem;
+}
+
+li { margin-bottom: 0.4rem; }
+
+.nav-links {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+}
+
+.lesson-number {
+  font-size: 0.85rem;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.followup {
+  margin-top: 2.5rem;
+  padding: 1rem 1.25rem;
+  background: #f0f9ff;
+  border-radius: 6px;
+  border: 1px solid #bfdbfe;
+  font-size: 0.92rem;
+}
+
+@media print {
+  body { padding: 1rem; }
+  pre { background: #f5f5f5; color: #2c2c2c; border: 1px solid #ddd; }
+  .keyword, .string, .comment, .function, .number, .operator { color: inherit; }
+}

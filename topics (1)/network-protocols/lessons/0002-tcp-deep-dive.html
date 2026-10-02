@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Network Protocols 2: TCP Deep Dive — Sockets, Streams, and node:net</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Network Protocols — Lesson 02</p>
+<h1>TCP Deep Dive</h1>
+<p class="subtitle">Sockets, reliable delivery, and building a raw TCP server with <code>node:net</code>.</p>
+
+<!-- ============================================ -->
+<h2>What Is a Socket?</h2>
+
+<p>
+  A <strong>socket</strong> is an endpoint in a network connection — a combination of
+  an IP address and a port number. Think of it as a phone number:
+  IP is the building, port is the apartment inside it.
+</p>
+
+<pre><code><span class="comment">192.168.1.10:3000</span>
+<span class="comment">│             │</span>
+<span class="comment">IP address    Port</span>
+<span class="comment">(the machine) (the process/service)</span></code></pre>
+
+<p>
+  A TCP <strong>connection</strong> is identified by a 4-tuple:
+  <code>(source IP, source port, dest IP, dest port)</code>.
+  This is how your server can handle thousands of simultaneous connections — each has a unique 4-tuple.
+</p>
+
+<div class="callout">
+  <strong>Well-known ports:</strong> HTTP = 80, HTTPS = 443, SSH = 22, PostgreSQL = 5432, Redis = 6379.
+  Ports below 1024 require root/admin on Linux. Your dev servers use 3000, 8080, etc. to avoid this.
+</div>
+
+<!-- ============================================ -->
+<h2>The TCP Connection Lifecycle</h2>
+
+<p>
+  A TCP connection goes through a defined sequence of states. Understanding this is essential for
+  debugging <code>ECONNREFUSED</code>, <code>ETIMEDOUT</code>, and <code>ECONNRESET</code> errors.
+</p>
+
+<pre><code><span class="comment">State           Who enters it     What's happening</span>
+─────────────────────────────────────────────────────────
+LISTEN          Server            Waiting for incoming connections (after .listen())
+SYN_SENT        Client            SYN sent, waiting for SYN-ACK
+SYN_RECEIVED    Server            SYN received, SYN-ACK sent
+ESTABLISHED     Both              Data can flow in both directions
+FIN_WAIT_1      Closer            FIN sent, waiting for ACK
+FIN_WAIT_2      Closer            Got ACK, waiting for peer's FIN
+TIME_WAIT       Closer            Waiting to ensure remote ACK arrived (2× MSL)
+CLOSE_WAIT      Receiver          Got FIN, waiting for app to close
+LAST_ACK        Receiver          FIN sent, waiting for final ACK
+CLOSED          Both              No connection</code></pre>
+
+<div class="callout warning">
+  <strong>TIME_WAIT is why you get "address already in use".</strong>
+  After closing a server, the port stays in TIME_WAIT for ~60 seconds.
+  Fix: <code>server.listen({ port, reuseAddress: true })</code> or use
+  <code>SO_REUSEADDR</code> socket option. In production this is standard practice.
+</div>
+
+<!-- ============================================ -->
+<h2>How TCP Guarantees Delivery</h2>
+
+<h3>Sequence Numbers and Acknowledgements</h3>
+<p>
+  Every byte sent over TCP has a <strong>sequence number</strong>.
+  The receiver sends back an <strong>ACK</strong> containing the next expected sequence number.
+  If the sender doesn't receive an ACK within a timeout, it retransmits.
+</p>
+
+<pre><code><span class="comment">Sender                    Receiver</span>
+  |                           |
+  |------ seq=100, data ----->|
+  |------ seq=200, data ----->|    (pipelined, don't wait)
+  |                           |
+  |<------ ACK=300 -----------|    "I got everything up to 300"
+  |                           |
+  |------ seq=300, data ----->|
+  |  (no ACK arrives...)      |
+  |------ seq=300, data ----->|    Retransmit!</code></pre>
+
+<h3>Flow Control — Slow Receiver Problem</h3>
+<p>
+  What if the sender blasts data faster than the receiver can process it?
+  TCP uses a <strong>receive window</strong> — the receiver advertises how much buffer space it has.
+  The sender can't send more than that amount without an ACK.
+</p>
+
+<h3>Congestion Control — Network Overload Problem</h3>
+<p>
+  What if the network itself is congested? TCP uses algorithms like
+  <strong>slow start</strong> and <strong>congestion avoidance</strong> to probe the network capacity
+  and back off when packets are dropped.
+</p>
+
+<div class="callout">
+  <strong>The key insight for a Node.js dev:</strong> All of this happens in the OS kernel, below your code.
+  What you see is that <code>socket.write()</code> may return <code>false</code> when the write buffer is full
+  (backpressure), and you should wait for the <code>'drain'</code> event. This is the same backpressure
+  mechanism you learned in the fs streams lessons.
+</div>
+
+<!-- ============================================ -->
+<h2>TCP in Node.js — <code>node:net</code></h2>
+
+<p>
+  <code>node:net</code> gives you raw TCP access. A socket in Node.js is a
+  <strong>Duplex stream</strong> — you can both read from it and write to it.
+</p>
+
+<h3>Building a TCP Server</h3>
+
+<pre><code><span class="keyword">import</span> net <span class="keyword">from</span> <span class="string">'node:net'</span>;
+
+<span class="keyword">const</span> server = net.<span class="function">createServer</span>((socket) => {
+  <span class="comment">// socket is a net.Socket — a Duplex stream</span>
+  console.<span class="function">log</span>(`Connected: <span class="string">${socket.remoteAddress}:${socket.remotePort}</span>`);
+
+  <span class="comment">// Read incoming data (it's a stream — arrives in chunks)</span>
+  socket.<span class="function">on</span>(<span class="string">'data'</span>, (chunk) => {
+    console.<span class="function">log</span>(`Received: <span class="string">${chunk.toString()}</span>`);
+    <span class="comment">// Echo it back</span>
+    socket.<span class="function">write</span>(chunk);
+  });
+
+  socket.<span class="function">on</span>(<span class="string">'end'</span>, () => {
+    <span class="comment">// Client closed their write side (sent FIN)</span>
+    console.<span class="function">log</span>(<span class="string">'Client disconnected'</span>);
+  });
+
+  socket.<span class="function">on</span>(<span class="string">'error'</span>, (err) => {
+    <span class="comment">// Handle ECONNRESET, ETIMEDOUT, etc.</span>
+    console.<span class="function">error</span>(<span class="string">'Socket error:'</span>, err.code);
+  });
+});
+
+server.<span class="function">listen</span>(<span class="number">8080</span>, <span class="string">'127.0.0.1'</span>, () => {
+  console.<span class="function">log</span>(<span class="string">'TCP server listening on 127.0.0.1:8080'</span>);
+});</code></pre>
+
+<h3>Building a TCP Client</h3>
+
+<pre><code><span class="keyword">import</span> net <span class="keyword">from</span> <span class="string">'node:net'</span>;
+
+<span class="keyword">const</span> client = net.<span class="function">createConnection</span>({ port: <span class="number">8080</span>, host: <span class="string">'127.0.0.1'</span> }, () => {
+  <span class="comment">// Callback fires when 'connect' event happens (handshake complete)</span>
+  console.<span class="function">log</span>(<span class="string">'Connected to server'</span>);
+  client.<span class="function">write</span>(<span class="string">'Hello from client\n'</span>);
+});
+
+client.<span class="function">on</span>(<span class="string">'data'</span>, (chunk) => {
+  console.<span class="function">log</span>(`Server says: <span class="string">${chunk.toString()}</span>`);
+  client.<span class="function">end</span>();  <span class="comment">// Send FIN — close our write side</span>
+});
+
+client.<span class="function">on</span>(<span class="string">'error'</span>, (err) => {
+  <span class="comment">// ECONNREFUSED if server isn't running</span>
+  console.<span class="function">error</span>(<span class="string">'Connection error:'</span>, err.code);
+});</code></pre>
+
+<!-- ============================================ -->
+<h2>The Critical Problem: TCP Is a Byte Stream, Not a Message Stream</h2>
+
+<p>
+  This is where most new Node.js network developers get caught. TCP does not know about
+  your "messages". It delivers a <strong>continuous stream of bytes</strong>.
+</p>
+
+<p>
+  You send two messages:
+</p>
+<pre><code>socket.write('Hello');
+socket.write('World');</code></pre>
+
+<p>
+  The receiver might see any of these:
+</p>
+<pre><code>'HelloWorld'      <span class="comment">// merged into one chunk</span>
+'Hel' + 'loWorld' <span class="comment">// split arbitrarily</span>
+'Hello' + 'World' <span class="comment">// what you expected, but NOT guaranteed</span></code></pre>
+
+<p>
+  This is called <strong>TCP framing</strong> — you need to define where one message ends
+  and the next begins. Common strategies:
+</p>
+
+<table>
+  <thead>
+    <tr><th>Strategy</th><th>How it works</th><th>Used by</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Delimiter</strong></td>
+      <td>Append <code>\n</code> or <code>\0</code> after each message</td>
+      <td>Redis, SMTP, IRC</td>
+    </tr>
+    <tr>
+      <td><strong>Length prefix</strong></td>
+      <td>Prefix each message with its byte length (e.g., 4-byte uint32)</td>
+      <td>HTTP/2, gRPC, most binary protocols</td>
+    </tr>
+    <tr>
+      <td><strong>Fixed size</strong></td>
+      <td>All messages are exactly N bytes</td>
+      <td>Some sensor/hardware protocols</td>
+    </tr>
+    <tr>
+      <td><strong>Self-describing</strong></td>
+      <td>Message format defines its own boundaries (e.g., JSON balanced braces)</td>
+      <td>HTTP/1.1 via Content-Length or chunked encoding</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <strong>This is why you can't naively read TCP data as strings.</strong>
+  HTTP handles this with <code>Content-Length</code> headers and chunked transfer encoding.
+  When building your own TCP protocol, always implement framing.
+</div>
+
+<!-- ============================================ -->
+<h2>Practical: Newline-Delimited JSON over TCP</h2>
+
+<pre><code><span class="keyword">import</span> net <span class="keyword">from</span> <span class="string">'node:net'</span>;
+
+<span class="keyword">const</span> server = net.<span class="function">createServer</span>((socket) => {
+  <span class="keyword">let</span> buffer = <span class="string">''</span>;
+
+  socket.<span class="function">setEncoding</span>(<span class="string">'utf8'</span>);
+
+  socket.<span class="function">on</span>(<span class="string">'data'</span>, (chunk) => {
+    buffer += chunk;
+
+    <span class="comment">// Split on newlines to extract complete messages</span>
+    <span class="keyword">const</span> lines = buffer.<span class="function">split</span>(<span class="string">'\n'</span>);
+
+    <span class="comment">// The last element may be an incomplete message — keep it</span>
+    buffer = lines.<span class="function">pop</span>();
+
+    <span class="keyword">for</span> (<span class="keyword">const</span> line <span class="keyword">of</span> lines) {
+      <span class="keyword">if</span> (!line.<span class="function">trim</span>()) <span class="keyword">continue</span>;
+      <span class="keyword">try</span> {
+        <span class="keyword">const</span> msg = JSON.<span class="function">parse</span>(line);
+        <span class="comment">// Process complete message</span>
+        socket.<span class="function">write</span>(JSON.<span class="function">stringify</span>({ ok: <span class="keyword">true</span>, echo: msg }) + <span class="string">'\n'</span>);
+      } <span class="keyword">catch</span> {
+        socket.<span class="function">write</span>(JSON.<span class="function">stringify</span>({ ok: <span class="keyword">false</span>, error: <span class="string">'Invalid JSON'</span> }) + <span class="string">'\n'</span>);
+      }
+    }
+  });
+});
+
+server.<span class="function">listen</span>(<span class="number">8080</span>);</code></pre>
+
+<!-- ============================================ -->
+<h2>Common Error Codes You'll See</h2>
+
+<table>
+  <thead>
+    <tr><th>Error Code</th><th>What happened</th><th>Typical cause</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>ECONNREFUSED</code></td>
+      <td>Connection actively rejected</td>
+      <td>Server not running on that port</td>
+    </tr>
+    <tr>
+      <td><code>ETIMEDOUT</code></td>
+      <td>No response within timeout period</td>
+      <td>Firewall dropping packets, wrong IP</td>
+    </tr>
+    <tr>
+      <td><code>ECONNRESET</code></td>
+      <td>Connection forcibly closed by peer</td>
+      <td>Server crashed, load balancer timeout</td>
+    </tr>
+    <tr>
+      <td><code>ENOTFOUND</code></td>
+      <td>Hostname not found</td>
+      <td>DNS failure, typo in hostname</td>
+    </tr>
+    <tr>
+      <td><code>EPIPE</code></td>
+      <td>Write to closed connection</td>
+      <td>Client disconnected while you were writing</td>
+    </tr>
+    <tr>
+      <td><code>EADDRINUSE</code></td>
+      <td>Port already bound</td>
+      <td>Server not fully closed (TIME_WAIT), another process</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">A TCP socket in Node.js is which type of stream?</p>
+  <button class="quiz-option" data-index="0">Readable — you can only receive data from the remote peer</button>
+  <button class="quiz-option" data-index="1">Writable — you can only send data to the remote peer</button>
+  <button class="quiz-option" data-index="2">Duplex — you can both send and receive data on the same socket</button>
+  <button class="quiz-option" data-index="3">Transform — data is transformed automatically as it passes through</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">You send two <code>socket.write()</code> calls back-to-back. What will the receiver definitely see?</p>
+  <button class="quiz-option" data-index="0">A stream of bytes — possibly merged or split, order is preserved though</button>
+  <button class="quiz-option" data-index="1">Two separate data events — one per write() call on the sender side</button>
+  <button class="quiz-option" data-index="2">Nothing until both writes are flushed and ACKed by the receiver</button>
+  <button class="quiz-option" data-index="3">Exactly what was written — TCP preserves message boundaries</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">You get <code>EADDRINUSE</code> when starting your server. What's the most likely cause?</p>
+  <button class="quiz-option" data-index="0">Your client is trying to connect before the server finishes starting up</button>
+  <button class="quiz-option" data-index="1">The server's IP address is already assigned to another network interface</button>
+  <button class="quiz-option" data-index="2">Your application is running out of available file descriptors on the OS</button>
+  <button class="quiz-option" data-index="3">The port is still in TIME_WAIT or another process is already using that port</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">What is TCP "flow control" solving?</p>
+  <button class="quiz-option" data-index="0">Network routers overloading — senders back off when the network is congested</button>
+  <button class="quiz-option" data-index="1">Fast sender overwhelming a slow receiver — receiver advertises its buffer space</button>
+  <button class="quiz-option" data-index="2">Out-of-order packets arriving — receiver reorders them by sequence number</button>
+  <button class="quiz-option" data-index="3">Lost packets in transit — sender retransmits after an ACK timeout expires</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<h2>Primary Source</h2>
+<p>
+  Read the Node.js docs: <a href="https://nodejs.org/api/net.html" target="_blank">node:net API reference</a>.
+  Then read <a href="https://www.cloudflare.com/learning/ddos/glossary/tcp-ip/" target="_blank">Cloudflare: TCP/IP explained</a>
+  for the protocol fundamentals.
+</p>
+
+<div class="followup">
+  <strong>Questions?</strong> Ask me about TCP keepalive, Nagle's algorithm (and why to disable it),
+  Unix domain sockets, the difference between <code>socket.end()</code> and <code>socket.destroy()</code>,
+  or half-open connections.
+</div>
+
+<div class="nav-links">
+  <a href="0001-the-protocol-stack.html">← Lesson 1: The Protocol Stack</a>
+  <a href="0003-udp-dgram.html">Lesson 3: UDP and node:dgram →</a>
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

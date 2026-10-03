@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Backend Concepts Lesson 2: Middleware Deep Dive</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+
+<p class="lesson-number">Backend Concepts — Lesson 02</p>
+<h1>Middleware Deep Dive</h1>
+<p class="subtitle">The core abstraction of backend frameworks — how the middleware stack works, <code>next()</code>, and the request lifecycle.</p>
+
+<!-- ============================================ -->
+<h2>What Is Middleware?</h2>
+
+<p><strong>Middleware</strong> is a function that has access to the request object (<code>req</code>), the response object (<code>res</code>), and the <code>next</code> function. It can:</p>
+
+<ul>
+  <li>Execute any code</li>
+  <li>Modify <code>req</code> and <code>res</code></li>
+  <li>End the request-response cycle</li>
+  <li>Call the next middleware in the stack</li>
+</ul>
+
+<pre><code><span class="keyword">function</span> <span class="function">myMiddleware</span>(req, res, next) {
+  <span class="comment">// Do something with req/res</span>
+  console.log(<span class="string">`<span class="keyword">${</span>req.method<span class="keyword">}</span> <span class="keyword">${</span>req.path<span class="keyword">}</span>`</span>);
+  
+  <span class="comment">// Then either:</span>
+  next();              <span class="comment">// Pass control to the next middleware</span>
+  <span class="comment">// OR</span>
+  res.send(<span class="string">'Done'</span>);    <span class="comment">// End the cycle (don't call next)</span>
+}</code></pre>
+
+<p>Here's the key insight: <strong>route handlers are also middleware</strong>. The only difference is that route handlers typically end the cycle instead of calling <code>next()</code>.</p>
+
+<p>This pattern exists across frameworks: Express, Koa, Fastify (via hooks), Hono, and even non-Node.js frameworks like Django (as "middleware") and Rails (as "middleware/filters").</p>
+
+<!-- ============================================ -->
+<h2>The Middleware Stack</h2>
+
+<p>Frameworks process requests through a stack of middleware functions, in order:</p>
+
+<pre><code><span class="keyword">const</span> app = <span class="function">express</span>();
+
+<span class="comment">// Middleware 1 (runs first)</span>
+app.use((req, res, next) => {
+  console.log(<span class="string">'Middleware 1'</span>);
+  next();
+});
+
+<span class="comment">// Middleware 2 (runs second)</span>
+app.use((req, res, next) => {
+  console.log(<span class="string">'Middleware 2'</span>);
+  next();
+});
+
+<span class="comment">// Route handler (runs third, ends cycle)</span>
+app.get(<span class="string">'/'</span>, (req, res) => {
+  console.log(<span class="string">'Route handler'</span>);
+  res.send(<span class="string">'Hello'</span>);
+});
+
+<span class="comment">// Request to GET / logs:</span>
+<span class="comment">// Middleware 1</span>
+<span class="comment">// Middleware 2</span>
+<span class="comment">// Route handler</span></code></pre>
+
+<p>Visualize it as a pipeline:</p>
+
+<pre><code>Request → [Middleware 1] → [Middleware 2] → [Route Handler] → Response
+               ↓                 ↓                  ↓
+            next()            next()           res.send()</code></pre>
+
+<!-- ============================================ -->
+<h2>The <code>next()</code> Function</h2>
+
+<p><code>next()</code> is how you pass control to the next middleware. Without it, the request hangs:</p>
+
+<pre><code><span class="comment">// ❌ BAD — request hangs forever</span>
+app.use((req, res, next) => {
+  console.log(<span class="string">'Logging...'</span>);
+  <span class="comment">// Forgot to call next() or send response!</span>
+});
+
+<span class="comment">// ✓ GOOD — passes control forward</span>
+app.use((req, res, next) => {
+  console.log(<span class="string">'Logging...'</span>);
+  next();
+});</code></pre>
+
+<h3><code>next()</code> Variants</h3>
+
+<pre><code><span class="comment">// 1. next() — continue to next middleware</span>
+next();
+
+<span class="comment">// 2. next('route') — skip remaining handlers for this route, go to next route</span>
+app.get(<span class="string">'/users/:id'</span>,
+  (req, res, next) => {
+    <span class="keyword">if</span> (req.params.id === <span class="string">'0'</span>) {
+      <span class="keyword">return</span> next(<span class="string">'route'</span>);  <span class="comment">// Skip to next app.get()</span>
+    }
+    next();
+  },
+  (req, res) => {
+    res.send(<span class="string">'User found'</span>);
+  }
+);
+app.get(<span class="string">'/users/:id'</span>, (req, res) => {
+  res.send(<span class="string">'Fallback route'</span>);  <span class="comment">// Hit when id === '0'</span>
+});
+
+<span class="comment">// 3. next(error) — jump to error handling middleware</span>
+next(<span class="keyword">new</span> Error(<span class="string">'Something broke'</span>));</code></pre>
+
+<!-- ============================================ -->
+<h2>Middleware Scope: Global vs Route-Specific</h2>
+
+<h3>Global Middleware (<code>app.use()</code> without path)</h3>
+
+<pre><code><span class="comment">// Runs for EVERY request</span>
+app.use((req, res, next) => {
+  req.requestTime = Date.now();
+  next();
+});</code></pre>
+
+<h3>Path-Specific Middleware</h3>
+
+<pre><code><span class="comment">// Only runs for /api/* routes</span>
+app.use(<span class="string">'/api'</span>, (req, res, next) => {
+  console.log(<span class="string">'API request'</span>);
+  next();
+});
+
+<span class="comment">// Only runs for this exact route</span>
+app.get(<span class="string">'/admin'</span>, checkAuth, (req, res) => {
+  res.send(<span class="string">'Admin panel'</span>);
+});</code></pre>
+
+<h3>Router-Level Middleware</h3>
+
+<pre><code><span class="keyword">const</span> router = <span class="function">Router</span>();
+
+<span class="comment">// Applies to all routes in this router</span>
+router.use((req, res, next) => {
+  console.log(<span class="string">'Router middleware'</span>);
+  next();
+});
+
+router.get(<span class="string">'/'</span>, handler);
+router.get(<span class="string">'/:id'</span>, handler);</code></pre>
+
+<!-- ============================================ -->
+<h2>Order Matters — A Lot</h2>
+
+<p>Middleware executes in the order it's defined. This is critical:</p>
+
+<pre><code><span class="comment">// ❌ WRONG ORDER — body not parsed yet</span>
+app.post(<span class="string">'/users'</span>, (req, res) => {
+  console.log(req.body);  <span class="comment">// undefined!</span>
+});
+app.use(express.json());  <span class="comment">// Too late</span>
+
+<span class="comment">// ✓ CORRECT ORDER — parser runs first</span>
+app.use(express.json());  <span class="comment">// Parse JSON bodies</span>
+app.post(<span class="string">'/users'</span>, (req, res) => {
+  console.log(req.body);  <span class="comment">// { name: 'Mohamed' }</span>
+});</code></pre>
+
+<p>Typical middleware order:</p>
+
+<pre><code><span class="keyword">const</span> app = <span class="function">express</span>();
+
+<span class="comment">// 1. Security middleware (CORS, helmet)</span>
+app.use(cors());
+app.use(helmet());
+
+<span class="comment">// 2. Body parsers</span>
+app.use(express.json());
+app.use(express.urlencoded({ extended: <span class="keyword">true</span> }));
+
+<span class="comment">// 3. Logging</span>
+app.use(morgan(<span class="string">'dev'</span>));
+
+<span class="comment">// 4. Static files</span>
+app.use(express.static(<span class="string">'public'</span>));
+
+<span class="comment">// 5. Session/Auth</span>
+app.use(session({ ... }));
+app.use(passport.initialize());
+
+<span class="comment">// 6. Your routes</span>
+app.use(<span class="string">'/api'</span>, apiRouter);
+app.use(<span class="string">'/'</span>, viewRouter);
+
+<span class="comment">// 7. 404 handler (no route matched)</span>
+app.use((req, res) => {
+  res.status(<span class="number">404</span>).json({ error: <span class="string">'Not found'</span> });
+});
+
+<span class="comment">// 8. Error handler (MUST be last, MUST have 4 params)</span>
+app.use((err, req, res, next) => {
+  res.status(<span class="number">500</span>).json({ error: err.message });
+});</code></pre>
+
+<!-- ============================================ -->
+<h2>Types of Middleware</h2>
+
+<h3>1. Application-Level Middleware</h3>
+<pre><code>app.use(middlewareFunction);
+app.get(<span class="string">'/path'</span>, middlewareFunction, handler);</code></pre>
+
+<h3>2. Router-Level Middleware</h3>
+<pre><code><span class="keyword">const</span> router = <span class="function">Router</span>();
+router.use(middlewareFunction);</code></pre>
+
+<h3>3. Built-in Middleware</h3>
+<pre><code><span class="comment">// Parse JSON bodies</span>
+app.use(express.json());
+
+<span class="comment">// Parse URL-encoded bodies (form submissions)</span>
+app.use(express.urlencoded({ extended: <span class="keyword">true</span> }));
+
+<span class="comment">// Serve static files</span>
+app.use(express.static(<span class="string">'public'</span>));</code></pre>
+
+<h3>4. Third-Party Middleware</h3>
+<pre><code><span class="keyword">import</span> cors <span class="keyword">from</span> <span class="string">'cors'</span>;
+<span class="keyword">import</span> helmet <span class="keyword">from</span> <span class="string">'helmet'</span>;
+<span class="keyword">import</span> morgan <span class="keyword">from</span> <span class="string">'morgan'</span>;
+
+app.use(cors());           <span class="comment">// CORS headers</span>
+app.use(helmet());         <span class="comment">// Security headers</span>
+app.use(morgan(<span class="string">'dev'</span>));    <span class="comment">// Request logging</span></code></pre>
+
+<h3>5. Error-Handling Middleware</h3>
+<pre><code><span class="comment">// MUST have exactly 4 parameters</span>
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(<span class="number">500</span>).json({ error: <span class="string">'Something broke!'</span> });
+});</code></pre>
+
+<!-- ============================================ -->
+<h2>Error Handling Middleware — The Special Case</h2>
+
+<p>Error middleware is different. It has <strong>4 parameters</strong> instead of 3:</p>
+
+<pre><code><span class="comment">// Regular middleware: (req, res, next)</span>
+<span class="comment">// Error middleware:   (err, req, res, next)</span>
+
+app.use((err, req, res, next) => {
+  console.error(<span class="string">'Error:'</span>, err.message);
+  
+  <span class="keyword">if</span> (res.headersSent) {
+    <span class="keyword">return</span> next(err);  <span class="comment">// Delegate to default handler</span>
+  }
+  
+  res.status(err.status || <span class="number">500</span>).json({
+    error: err.message,
+    ...(process.env.NODE_ENV === <span class="string">'development'</span> && { stack: err.stack })
+  });
+});</code></pre>
+
+<p>How errors reach the error handler:</p>
+
+<pre><code><span class="comment">// Method 1: Call next(error)</span>
+app.get(<span class="string">'/users/:id'</span>, (req, res, next) => {
+  <span class="keyword">const</span> user = findUser(req.params.id);
+  <span class="keyword">if</span> (!user) {
+    <span class="keyword">return</span> next(<span class="keyword">new</span> Error(<span class="string">'User not found'</span>));
+  }
+  res.json(user);
+});
+
+<span class="comment">// Method 2: Throw (sync code only)</span>
+app.get(<span class="string">'/sync'</span>, (req, res) => {
+  <span class="keyword">throw</span> <span class="keyword">new</span> Error(<span class="string">'Sync error'</span>);  <span class="comment">// Express catches this</span>
+});
+
+<span class="comment">// Method 3: Async errors (Express 5+ or wrapper needed)</span>
+app.get(<span class="string">'/async'</span>, <span class="keyword">async</span> (req, res, next) => {
+  <span class="keyword">try</span> {
+    <span class="keyword">const</span> data = <span class="keyword">await</span> fetchData();
+    res.json(data);
+  } <span class="keyword">catch</span> (err) {
+    next(err);  <span class="comment">// Must manually pass async errors</span>
+  }
+});</code></pre>
+
+<div class="callout warning">
+  <strong>Express 4 async trap:</strong> In Express 4, thrown errors in <code>async</code> functions are NOT caught automatically.
+  You must use <code>try/catch</code> and call <code>next(err)</code>. Express 5 fixes this.
+</div>
+
+<h3>Async Error Wrapper (Express 4)</h3>
+
+<pre><code><span class="comment">// Utility to catch async errors</span>
+<span class="keyword">const</span> <span class="function">asyncHandler</span> = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
+
+<span class="comment">// Usage — no try/catch needed</span>
+app.get(<span class="string">'/users'</span>, <span class="function">asyncHandler</span>(<span class="keyword">async</span> (req, res) => {
+  <span class="keyword">const</span> users = <span class="keyword">await</span> db.query(<span class="string">'SELECT * FROM users'</span>);
+  res.json(users);
+  <span class="comment">// If db.query throws, asyncHandler catches it and calls next(err)</span>
+}));</code></pre>
+
+<!-- ============================================ -->
+<h2>Modifying <code>req</code> and <code>res</code></h2>
+
+<p>Middleware often attaches data to <code>req</code> for later middleware to use:</p>
+
+<pre><code><span class="comment">// Authentication middleware</span>
+<span class="keyword">async function</span> <span class="function">authenticate</span>(req, res, next) {
+  <span class="keyword">const</span> token = req.headers.authorization?.split(<span class="string">' '</span>)[<span class="number">1</span>];
+  
+  <span class="keyword">if</span> (!token) {
+    <span class="keyword">return</span> res.status(<span class="number">401</span>).json({ error: <span class="string">'No token'</span> });
+  }
+  
+  <span class="keyword">try</span> {
+    <span class="keyword">const</span> decoded = jwt.verify(token, SECRET);
+    req.user = decoded;  <span class="comment">// Attach user to request</span>
+    next();
+  } <span class="keyword">catch</span> {
+    res.status(<span class="number">401</span>).json({ error: <span class="string">'Invalid token'</span> });
+  }
+}
+
+<span class="comment">// Later middleware/routes can access req.user</span>
+app.get(<span class="string">'/profile'</span>, authenticate, (req, res) => {
+  res.json({ user: req.user });  <span class="comment">// req.user exists because authenticate ran</span>
+});</code></pre>
+
+<p>Common patterns:</p>
+<ul>
+  <li><code>req.user</code> — authenticated user</li>
+  <li><code>req.session</code> — session data</li>
+  <li><code>req.body</code> — parsed request body</li>
+  <li><code>req.files</code> — uploaded files (multer)</li>
+  <li><code>res.locals</code> — data for templates</li>
+</ul>
+
+<!-- ============================================ -->
+<h2>Conditional Middleware</h2>
+
+<p>Run middleware only under certain conditions:</p>
+
+<pre><code><span class="comment">// Only parse JSON for specific content types</span>
+app.use((req, res, next) => {
+  <span class="keyword">if</span> (req.is(<span class="string">'application/json'</span>)) {
+    express.json()(req, res, next);
+  } <span class="keyword">else</span> {
+    next();
+  }
+});
+
+<span class="comment">// Skip middleware for certain paths</span>
+<span class="keyword">const</span> <span class="function">unlessPath</span> = (paths, middleware) => {
+  <span class="keyword">return</span> (req, res, next) => {
+    <span class="keyword">if</span> (paths.includes(req.path)) {
+      <span class="keyword">return</span> next();
+    }
+    middleware(req, res, next);
+  };
+};
+
+app.use(<span class="function">unlessPath</span>([<span class="string">'/login'</span>, <span class="string">'/register'</span>], authenticate));</code></pre>
+
+<!-- ============================================ -->
+<h2>Writing Reusable Middleware</h2>
+
+<p>Middleware factories return middleware functions with configuration:</p>
+
+<pre><code><span class="comment">// Middleware factory</span>
+<span class="keyword">function</span> <span class="function">rateLimit</span>(options = {}) {
+  <span class="keyword">const</span> { windowMs = <span class="number">60000</span>, max = <span class="number">100</span> } = options;
+  <span class="keyword">const</span> requests = <span class="keyword">new</span> Map();
+
+  <span class="keyword">return</span> (req, res, next) => {
+    <span class="keyword">const</span> ip = req.ip;
+    <span class="keyword">const</span> now = Date.now();
+    <span class="keyword">const</span> windowStart = now - windowMs;
+
+    <span class="comment">// Clean old entries</span>
+    <span class="keyword">const</span> requestTimes = (requests.get(ip) || [])
+      .filter(time => time > windowStart);
+
+    <span class="keyword">if</span> (requestTimes.length >= max) {
+      <span class="keyword">return</span> res.status(<span class="number">429</span>).json({ error: <span class="string">'Too many requests'</span> });
+    }
+
+    requestTimes.push(now);
+    requests.set(ip, requestTimes);
+    next();
+  };
+}
+
+<span class="comment">// Usage</span>
+app.use(<span class="function">rateLimit</span>({ windowMs: <span class="number">60000</span>, max: <span class="number">100</span> }));  <span class="comment">// 100 req/min</span>
+app.use(<span class="string">'/api'</span>, <span class="function">rateLimit</span>({ max: <span class="number">30</span> }));             <span class="comment">// 30 req/min for /api</span></code></pre>
+
+<!-- ============================================ -->
+<h2>The Request Lifecycle — Complete Picture</h2>
+
+<pre><code>Incoming Request
+      ↓
+┌─────────────────────────────────────────────┐
+│  Global Middleware (app.use without path)   │
+│  - CORS, Helmet, Body parsers, Logging      │
+└─────────────────────────────────────────────┘
+      ↓
+┌─────────────────────────────────────────────┐
+│  Path-Specific Middleware                   │
+│  - app.use('/api', apiMiddleware)           │
+└─────────────────────────────────────────────┘
+      ↓
+┌─────────────────────────────────────────────┐
+│  Route Matching                             │
+│  - First matching route wins                │
+└─────────────────────────────────────────────┘
+      ↓
+┌─────────────────────────────────────────────┐
+│  Route Handlers (also middleware)           │
+│  - app.get('/users', handler1, handler2)    │
+└─────────────────────────────────────────────┘
+      ↓
+┌─────────────────────────────────────────────┐
+│  If no route matched: 404 handler           │
+│  If error thrown: Error middleware          │
+└─────────────────────────────────────────────┘
+      ↓
+   Response Sent</code></pre>
+
+<!-- ============================================ -->
+<h2>Hands-On Exercise</h2>
+
+<p>Build a mini Express app with these middleware:</p>
+
+<pre><code><span class="comment">// 1. Request logger — logs method, path, and timestamp</span>
+<span class="comment">// 2. Request timer — adds X-Response-Time header</span>
+<span class="comment">// 3. Auth middleware — checks for x-api-key header</span>
+<span class="comment">// 4. JSON body parser (use express.json())</span>
+<span class="comment">// 5. A protected route: POST /data (requires auth)</span>
+<span class="comment">// 6. A public route: GET /health (no auth needed)</span>
+<span class="comment">// 7. 404 handler</span>
+<span class="comment">// 8. Error handler</span>
+
+<span class="comment">// Test with:</span>
+<span class="comment">// curl http://localhost:3000/health</span>
+<span class="comment">// curl -X POST http://localhost:3000/data -H "Content-Type: application/json" -d '{"test":1}'</span>
+<span class="comment">// curl -X POST http://localhost:3000/data -H "x-api-key: secret" -H "Content-Type: application/json" -d '{"test":1}'</span></code></pre>
+
+<!-- ============================================ -->
+<h2>Primary Source</h2>
+
+<p>
+  📖 Read: <a href="https://expressjs.com/en/guide/using-middleware.html" target="_blank">Express.js — Using Middleware</a> (official docs)
+</p>
+
+<!-- ============================================ -->
+<h2>Knowledge Check</h2>
+
+<div class="quiz" data-answer="2">
+  <p class="quiz-question">What happens if a middleware function doesn't call <code>next()</code> or send a response?</p>
+  <button class="quiz-option" data-index="0">The framework automatically calls next() after 30 seconds</button>
+  <button class="quiz-option" data-index="1">The framework throws an error and crashes the server</button>
+  <button class="quiz-option" data-index="2">The request hangs until the client times out</button>
+  <button class="quiz-option" data-index="3">The framework sends an empty 200 response automatically</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="quiz-question">How does Express identify error-handling middleware?</p>
+  <button class="quiz-option" data-index="0">By the middleware function's name containing 'error'</button>
+  <button class="quiz-option" data-index="1">By the function having exactly four parameters (err, req, res, next)</button>
+  <button class="quiz-option" data-index="2">By registering it with app.useError() instead of app.use()</button>
+  <button class="quiz-option" data-index="3">By placing it in a special errors/ directory in the project</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="quiz-question">You have <code>app.use(express.json())</code> defined AFTER your route handler. What is <code>req.body</code> in the handler?</p>
+  <button class="quiz-option" data-index="0">undefined</button>
+  <button class="quiz-option" data-index="1">The raw request body as a string</button>
+  <button class="quiz-option" data-index="2">The parsed JSON object</button>
+  <button class="quiz-option" data-index="3">An empty object {}</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="quiz-question">What does <code>next('route')</code> do differently from <code>next()</code>?</p>
+  <button class="quiz-option" data-index="0">It skips all remaining middleware and sends a 404 response</button>
+  <button class="quiz-option" data-index="1">It passes an error with message 'route' to error handlers</button>
+  <button class="quiz-option" data-index="2">It redirects the request to a different URL path</button>
+  <button class="quiz-option" data-index="3">It skips remaining handlers for this route and tries the next matching route</button>
+  <p class="quiz-feedback"></p>
+</div>
+
+<!-- ============================================ -->
+<div class="nav-links">
+  <a href="0001-routing.html">← Lesson 1: Routing</a>
+  <span></span>
+</div>
+
+<div class="followup">
+  💬 <strong>Questions?</strong> Middleware is the heart of backend frameworks. Ask about anything —
+  execution order, error handling, async patterns, or real-world use cases.
+</div>
+
+<script src="../../../assets/quiz.js"></script>
+</body>
+</html>

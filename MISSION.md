@@ -12,8 +12,9 @@ To become a competent full-stack developer capable of building production-grade 
 - ✅ **Events & Event Loop** — 7 lessons complete. EventEmitter, 6 phases, microtasks, blocking, Worker Threads, event-driven decoupling, setImmediate & scheduling.
 - ✅ **Child Processes & Workers** — 4 lessons complete. exec/spawn/fork, Worker Threads, Cluster, decision guide.
 - 🔄 **Network Protocols** — in progress. TCP, UDP/dgram, DNS, TLS. The transport and security layers beneath HTTP.
-- ⬜ **Express/Fastify** — next topic
-- ⬜ **Databases** — planned
+- 🔄 **Express/Fastify** — in progress (1 lesson). Express fundamentals complete.
+- 🔄 **Backend Concepts** — in progress (2 lessons). Routing and middleware deep dives.
+- 🔄 **Databases** — in progress (1 lesson). SQL vs NoSQL, ACID & CAP fundamentals complete.
 - ⬜ **Authentication** — planned
 
 ## Success Criteria

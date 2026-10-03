@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SQL vs NoSQL & ACID Fundamentals</title>
+  <link rel="stylesheet" href="../../../assets/style.css">
+  <link rel="stylesheet" href="../../../assets/quiz.css">
+</head>
+<body>
+  <p class="lesson-number">Databases — Lesson 1</p>
+  <h1>SQL vs NoSQL & ACID Fundamentals</h1>
+  <p class="subtitle">Understanding database paradigms and the guarantees that make data trustworthy</p>
+
+  <h2>Why This Matters</h2>
+  <p>
+    You've built Express APIs that handle HTTP requests. Now those APIs need to store and retrieve data. 
+    The database you choose shapes your entire backend architecture: your data model, your query patterns, 
+    how you scale, and whether "it's in the database" actually means "it's safe."
+  </p>
+
+  <h2>Two Paradigms: SQL and NoSQL</h2>
+  
+  <p>
+    Databases fall into two broad families. Understanding the difference isn't about choosing a "winner"—it's 
+    about matching the tool to the problem.
+  </p>
+
+  <h3>SQL (Relational) Databases</h3>
+  <p>
+    SQL databases organize data into <strong>tables</strong> with predefined <strong>schemas</strong>. 
+    Every row in a table has the same columns. Tables connect to each other through <strong>relationships</strong> 
+    (foreign keys). You query them using SQL (Structured Query Language).
+  </p>
+
+  <pre><code><span class="comment">-- A typical SQL schema: users and orders with a relationship</span>
+<span class="keyword">CREATE TABLE</span> users (
+  id <span class="function">SERIAL</span> <span class="keyword">PRIMARY KEY</span>,
+  email <span class="function">VARCHAR</span>(<span class="number">255</span>) <span class="keyword">UNIQUE NOT NULL</span>,
+  name <span class="function">VARCHAR</span>(<span class="number">100</span>) <span class="keyword">NOT NULL</span>,
+  created_at <span class="function">TIMESTAMP</span> <span class="keyword">DEFAULT NOW</span>()
+);
+
+<span class="keyword">CREATE TABLE</span> orders (
+  id <span class="function">SERIAL</span> <span class="keyword">PRIMARY KEY</span>,
+  user_id <span class="function">INT</span> <span class="keyword">REFERENCES</span> users(id),
+  total <span class="function">DECIMAL</span>(<span class="number">10</span>,<span class="number">2</span>) <span class="keyword">NOT NULL</span>,
+  status <span class="function">VARCHAR</span>(<span class="number">20</span>) <span class="keyword">DEFAULT</span> <span class="string">'pending'</span>
+);</code></pre>
+
+  <p>Key characteristics:</p>
+  <ul>
+    <li><strong>Fixed schema</strong> — You define the structure upfront. Adding a column requires a migration.</li>
+    <li><strong>Normalized data</strong> — Data is split across tables to avoid duplication. A user's name lives in one place.</li>
+    <li><strong>Joins</strong> — You combine tables with SQL JOIN operations to reassemble related data.</li>
+    <li><strong>ACID transactions</strong> — Operations are reliable and consistent (more on this below).</li>
+  </ul>
+
+  <p><strong>Examples:</strong> PostgreSQL, MySQL, SQLite, SQL Server, Oracle</p>
+
+  <h3>NoSQL (Non-Relational) Databases</h3>
+  <p>
+    NoSQL is an umbrella term for databases that don't use the relational model. They come in several flavors, 
+    each optimized for different access patterns.
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Structure</th>
+        <th>Use Case</th>
+        <th>Example</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Document</strong></td>
+        <td>JSON-like documents</td>
+        <td>Flexible, nested data</td>
+        <td>MongoDB, CouchDB</td>
+      </tr>
+      <tr>
+        <td><strong>Key-Value</strong></td>
+        <td>Simple key → value pairs</td>
+        <td>Caching, sessions</td>
+        <td>Redis, DynamoDB</td>
+      </tr>
+      <tr>
+        <td><strong>Wide-Column</strong></td>
+        <td>Columns grouped into families</td>
+        <td>Analytics, time-series</td>
+        <td>Cassandra, HBase</td>
+      </tr>
+      <tr>
+        <td><strong>Graph</strong></td>
+        <td>Nodes and edges</td>
+        <td>Relationships, social networks</td>
+        <td>Neo4j, Amazon Neptune</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>A document database like MongoDB stores data as flexible JSON-like documents:</p>
+
+  <pre><code><span class="comment">// A MongoDB document — no predefined schema required</span>
+{
+  <span class="string">"_id"</span>: <span class="function">ObjectId</span>(<span class="string">"507f1f77bcf86cd799439011"</span>),
+  <span class="string">"email"</span>: <span class="string">"alice@example.com"</span>,
+  <span class="string">"name"</span>: <span class="string">"Alice"</span>,
+  <span class="string">"orders"</span>: [
+    { <span class="string">"total"</span>: <span class="number">59.99</span>, <span class="string">"status"</span>: <span class="string">"completed"</span> },
+    { <span class="string">"total"</span>: <span class="number">124.00</span>, <span class="string">"status"</span>: <span class="string">"pending"</span> }
+  ],
+  <span class="string">"preferences"</span>: { <span class="string">"newsletter"</span>: <span class="keyword">true</span> }
+}</code></pre>
+
+  <p>Key characteristics:</p>
+  <ul>
+    <li><strong>Flexible/dynamic schema</strong> — Each document can have different fields. Easy to evolve.</li>
+    <li><strong>Denormalized data</strong> — Related data is often embedded in one document (orders inside user).</li>
+    <li><strong>No joins</strong> — You design data to be fetched in one query, not assembled from multiple tables.</li>
+    <li><strong>Horizontal scaling</strong> — Designed to distribute across many servers (sharding).</li>
+  </ul>
+
+  <h3>The Core Trade-off</h3>
+  
+  <div class="callout">
+    <strong>SQL: Structure and Consistency</strong>
+    <p>
+      Choose SQL when your data has clear relationships, you need complex queries across multiple entities, 
+      and correctness matters more than raw speed. Think: financial systems, inventory, user accounts.
+    </p>
+  </div>
+
+  <div class="callout warning">
+    <strong>NoSQL: Flexibility and Scale</strong>
+    <p>
+      Choose NoSQL when your data structure varies, you need to scale horizontally to massive volumes, 
+      or your access patterns are simple (fetch one document by ID). Think: real-time feeds, IoT data, caching.
+    </p>
+  </div>
+
+  <div class="quiz" data-answer="2">
+    <p class="quiz-question">Your e-commerce app needs to track user orders, payments, and inventory levels. When a user completes a purchase, all three must update atomically. Which database type is the better fit?</p>
+    <button class="quiz-option" data-index="0">NoSQL, because it's faster</button>
+    <button class="quiz-option" data-index="1">NoSQL, because it scales better</button>
+    <button class="quiz-option" data-index="2">SQL, because it supports transactions</button>
+    <button class="quiz-option" data-index="3">Either would work equally well</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <h2>ACID: The Guarantees That Matter</h2>
+
+  <p>
+    ACID is an acronym for four properties that define reliable database transactions. The term was formalized 
+    by Andreas Reuter and Theo Härder in 1983. When a database is "ACID-compliant," it means you can 
+    <strong>trust</strong> it with critical operations.
+  </p>
+
+  <h3>A — Atomicity</h3>
+  <p>
+    A transaction is <strong>all-or-nothing</strong>. Either every operation in the transaction succeeds, 
+    or none of them take effect. There's no partial state.
+  </p>
+
+  <pre><code><span class="comment">-- Bank transfer: move $100 from Alice to Bob</span>
+<span class="keyword">BEGIN TRANSACTION</span>;
+
+<span class="keyword">UPDATE</span> accounts <span class="keyword">SET</span> balance = balance - <span class="number">100</span> 
+<span class="keyword">WHERE</span> user_id = <span class="string">'alice'</span>;
+
+<span class="keyword">UPDATE</span> accounts <span class="keyword">SET</span> balance = balance + <span class="number">100</span> 
+<span class="keyword">WHERE</span> user_id = <span class="string">'bob'</span>;
+
+<span class="keyword">COMMIT</span>;
+<span class="comment">-- If EITHER update fails, BOTH are rolled back</span>
+<span class="comment">-- Money is never lost or created</span></code></pre>
+
+  <p>
+    <strong>Without atomicity:</strong> If the system crashes between the two UPDATE statements, 
+    Alice loses $100 but Bob never receives it. The money vanishes.
+  </p>
+
+  <h3>C — Consistency</h3>
+  <p>
+    Every transaction moves the database from one <strong>valid state</strong> to another. 
+    Database constraints (foreign keys, unique indexes, check constraints) are always enforced. 
+    A transaction that would violate a constraint is rejected.
+  </p>
+
+  <pre><code><span class="comment">-- Consistency constraint: balance cannot go negative</span>
+<span class="keyword">ALTER TABLE</span> accounts 
+<span class="keyword">ADD CONSTRAINT</span> positive_balance <span class="keyword">CHECK</span> (balance >= <span class="number">0</span>);
+
+<span class="comment">-- This transaction will FAIL if Alice only has $50</span>
+<span class="keyword">UPDATE</span> accounts <span class="keyword">SET</span> balance = balance - <span class="number">100</span> 
+<span class="keyword">WHERE</span> user_id = <span class="string">'alice'</span>;
+<span class="comment">-- Error: CHECK constraint "positive_balance" violated</span></code></pre>
+
+  <h3>I — Isolation</h3>
+  <p>
+    Concurrent transactions don't interfere with each other. Each transaction behaves as if it were 
+    the <strong>only</strong> transaction running. This prevents race conditions.
+  </p>
+
+  <div class="callout danger">
+    <strong>The Race Condition Problem</strong>
+    <p>
+      Imagine two transactions at month-end: (1) Alice transfers $100 to Bob, and (2) the bank calculates 
+      6% interest on all accounts. If isolation is broken, the interest calculation might read a 
+      half-completed state—seeing the $100 credited to Bob but not yet debited from Alice. 
+      The bank ends up paying interest on money that was counted twice.
+    </p>
+    <p>
+      <em>Isolation ensures the interest calculation either sees the state before the transfer or after—never during.</em>
+      <br>
+      <small>Source: <a href="https://cs145.stanford.edu/Module4-Transactions/acid-properties.html">Stanford CS145</a></small>
+    </p>
+  </div>
+
+  <h3>D — Durability</h3>
+  <p>
+    Once a transaction is <strong>committed</strong>, it survives system failures. The data is written to 
+    non-volatile storage. Even if the server crashes immediately after commit, the data is safe.
+  </p>
+
+  <p>
+    <strong>Practical meaning:</strong> When your API returns <code>{ "status": "success" }</code> after 
+    saving to the database, that data is actually saved. A power failure won't lose it.
+  </p>
+
+  <div class="quiz" data-answer="1">
+    <p class="quiz-question">A user's payment is processed: their card is charged, but the server crashes before the order status is updated to "paid". Which ACID property prevents this inconsistent state?</p>
+    <button class="quiz-option" data-index="0">Consistency: constraints prevent invalid state</button>
+    <button class="quiz-option" data-index="1">Atomicity: both operations commit or neither does</button>
+    <button class="quiz-option" data-index="2">Isolation: transactions don't interfere</button>
+    <button class="quiz-option" data-index="3">Durability: committed data survives crashes</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <h2>BASE: The NoSQL Alternative</h2>
+
+  <p>
+    NoSQL databases often trade ACID guarantees for <strong>scalability</strong> and <strong>availability</strong>. 
+    Their consistency model is called BASE:
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Letter</th>
+        <th>Property</th>
+        <th>What It Means</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>BA</strong></td>
+        <td>Basically Available</td>
+        <td>The system responds to every request, even during partial failures</td>
+      </tr>
+      <tr>
+        <td><strong>S</strong></td>
+        <td>Soft State</td>
+        <td>Data may change over time as it propagates between replicas</td>
+      </tr>
+      <tr>
+        <td><strong>E</strong></td>
+        <td>Eventual Consistency</td>
+        <td>All replicas will <em>eventually</em> converge to the same value</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    <strong>Example:</strong> You update your profile photo on a social media app. A friend in another 
+    region might see your old photo for a few seconds because their request hit a replica that hasn't 
+    synced yet. Eventually, all replicas catch up.
+  </p>
+
+  <div class="callout">
+    <strong>ACID vs BASE: Not a Binary Choice</strong>
+    <p>
+      Modern databases blur these lines. MongoDB supports multi-document ACID transactions. 
+      PostgreSQL handles JSON natively. Many NoSQL databases let you tune consistency per-query. 
+      The models are converging.
+    </p>
+  </div>
+
+  <h2>The CAP Theorem</h2>
+
+  <p>
+    The CAP theorem (Eric Brewer, 2000) explains <em>why</em> distributed databases make these trade-offs. 
+    A distributed system can only guarantee <strong>two</strong> of these three properties:
+  </p>
+
+  <ul>
+    <li><strong>Consistency (C)</strong> — Every read returns the most recent write</li>
+    <li><strong>Availability (A)</strong> — Every request gets a response</li>
+    <li><strong>Partition Tolerance (P)</strong> — System works despite network failures between nodes</li>
+  </ul>
+
+  <p>
+    Network partitions <em>will</em> happen in any distributed system. You can't design them away. 
+    That means you must choose: <strong>CP</strong> (consistency during partitions, some requests fail) 
+    or <strong>AP</strong> (availability during partitions, some reads return stale data).
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Choice</th>
+        <th>Database Examples</th>
+        <th>Behavior During Partition</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>CP</strong></td>
+        <td>MongoDB, HBase, Redis</td>
+        <td>Returns error rather than stale data</td>
+      </tr>
+      <tr>
+        <td><strong>AP</strong></td>
+        <td>Cassandra, CouchDB, DynamoDB</td>
+        <td>Returns response, possibly stale</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="quiz" data-answer="0">
+    <p class="quiz-question">Your app shows a user's follower count. It's okay if the number is a few seconds out of date, but users must always see <em>something</em>. Which CAP trade-off fits this requirement?</p>
+    <button class="quiz-option" data-index="0">AP: prioritize availability, accept eventual consistency</button>
+    <button class="quiz-option" data-index="1">CP: prioritize consistency, accept occasional failures</button>
+    <button class="quiz-option" data-index="2">CA: prioritize both, no partition tolerance needed</button>
+    <button class="quiz-option" data-index="3">CAP doesn't apply to this scenario</button>
+    <p class="quiz-feedback"></p>
+  </div>
+
+  <h2>When to Use What</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Scenario</th>
+        <th>Recommended</th>
+        <th>Why</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Financial transactions, payments</td>
+        <td>SQL (PostgreSQL, MySQL)</td>
+        <td>ACID transactions, data integrity is critical</td>
+      </tr>
+      <tr>
+        <td>User accounts, authentication</td>
+        <td>SQL (PostgreSQL, MySQL)</td>
+        <td>Relational data, consistency matters</td>
+      </tr>
+      <tr>
+        <td>Session storage, caching</td>
+        <td>Redis (Key-Value)</td>
+        <td>Fast reads, simple access pattern</td>
+      </tr>
+      <tr>
+        <td>Content management, blogs</td>
+        <td>MongoDB (Document)</td>
+        <td>Flexible schema, nested content</td>
+      </tr>
+      <tr>
+        <td>Real-time analytics, logs</td>
+        <td>Cassandra (Wide-Column)</td>
+        <td>High write throughput, time-series</td>
+      </tr>
+      <tr>
+        <td>Social graphs, recommendations</td>
+        <td>Neo4j (Graph)</td>
+        <td>Relationship traversal is the core query</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Summary</h2>
+
+  <ul>
+    <li><strong>SQL databases</strong> use tables, schemas, and SQL. They excel at relationships and complex queries.</li>
+    <li><strong>NoSQL databases</strong> come in many forms (document, key-value, wide-column, graph). They excel at flexibility and scale.</li>
+    <li><strong>ACID</strong> (Atomicity, Consistency, Isolation, Durability) guarantees reliable transactions. SQL databases are ACID-compliant by default.</li>
+    <li><strong>BASE</strong> (Basically Available, Soft state, Eventual consistency) trades immediate consistency for availability and scale.</li>
+    <li><strong>CAP theorem</strong> explains why distributed databases must choose between consistency and availability during network partitions.</li>
+    <li>Modern databases blur these lines—choose based on your specific requirements, not ideology.</li>
+  </ul>
+
+  <h2>Primary Source</h2>
+  <p>
+    📖 <a href="https://cs145.stanford.edu/Module4-Transactions/acid-properties.html">Stanford CS145: ACID Properties</a> — 
+    Clear explanation with the banking race condition example. Part of Stanford's Database Systems course.
+  </p>
+  <p>
+    📖 <a href="https://ebook.learn.epam.com/node-gmp/docs/nosql/cap-base">EPAM Node.js GMP: CAP & BASE</a> — 
+    Excellent Node.js-focused explanation of distributed database trade-offs.
+  </p>
+
+  <div class="followup">
+    <strong>Questions?</strong> Ask me to clarify any concept, see more examples, or dive deeper into 
+    a specific database type. I'm here to help you build a solid mental model.
+  </div>
+
+  <div class="nav-links">
+    <span>← First lesson in Databases</span>
+    <a href="0002-sql-basics.html">Next: SQL Basics →</a>
+  </div>
+
+  <script src="../../../assets/quiz.js"></script>
+</body>
+</html>
